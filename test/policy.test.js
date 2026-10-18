@@ -7,6 +7,7 @@ import {
   TIERS,
   appointedMembers,
   boardAlerts,
+  casePhase,
   completedTasksWithoutEvidence,
   createEmptyState,
   createInitialState,
@@ -14,6 +15,7 @@ import {
   latestGate,
   summarizeBoard,
   validateAppointInput,
+  validateAuditInput,
   validateCloseInput,
   validateEdictInput,
   validateEvidenceInput,
@@ -93,6 +95,7 @@ function planPass(state, options = {}) {
       reviewer: options.reviewer ?? 'menxia',
       defects: [],
       checked: options.checked ?? ['acceptance reviewed'],
+      conditions: options.conditions ?? [],
       reviews: [],
       summary: null,
       rev,
@@ -111,6 +114,7 @@ function planReject(state, options = {}) {
       reviewer: 'menxia',
       defects: ['acceptance missing'],
       checked: [],
+      conditions: [],
       reviews: [],
       summary: null,
       rev,
@@ -160,6 +164,7 @@ function resultPass(state, options = {}) {
       reviewer: options.reviewer ?? 'yushi',
       defects: [],
       checked: options.checked ?? ['evidence reviewed'],
+      conditions: options.conditions ?? [],
       reviews: options.reviews ?? [{ taskId: 'task-1', verdict: 'pass', defects: [] }],
       summary: null,
       rev,
@@ -174,6 +179,35 @@ function readyForResult() {
 
 function closedState() {
   return resultPass(readyForResult())
+}
+
+function riskEdict(overrides = {}) {
+  return baseEdict({
+    riskLevel: 'high',
+    assumptions: ['workspace is writable'],
+    risks: ['a failed deployment may leave the workspace dirty'],
+    tools: ['bash', 'edit'],
+    dataScope: ['src/'],
+    budget: 'max 40 tool calls, 2 engineers',
+    ...overrides,
+  })
+}
+
+function audit(state, options = {}) {
+  return append(state, 'audit', {
+    audit: {
+      id: `audit-${options.id ?? 1}`,
+      scope: options.scope ?? 'plan',
+      verdict: options.verdict ?? 'pass',
+      auditor: options.auditor ?? 'shenji',
+      checks: options.checks ?? ['checked the gate conditions'],
+      conditionsMet: options.conditionsMet ?? [],
+      defects: options.defects ?? [],
+      summary: null,
+      rev: state.revision + 1,
+      createdAt: null,
+    },
+  })
 }
 
 /* Projection fold */
@@ -460,6 +494,31 @@ test('a pass must cite checked items and be cast by an independent teammate', ()
   )
 })
 
+test('case phase is derived from the same event log', () => {
+  let state = createEmptyState()
+  assert.equal(casePhase(state), 'idle')
+  state = planPass(activeState())
+  assert.equal(casePhase(state), 'dispatching')
+  state = appointment(state)
+  assert.equal(casePhase(state), 'executing')
+  state = resultPass(evidence(state))
+  assert.equal(casePhase(state), 'ready_to_close')
+  let awaiting = planPass(activeState(riskEdict()))
+  assert.equal(casePhase(awaiting), 'awaiting_human')
+  awaiting = foldEvent(awaiting, {
+    type: 'command/run', time: 1700000000000,
+    data: { name: 'sansheng', args: 'approve 允许部署', source: { kind: 'user' } },
+  })
+  assert.equal(casePhase(awaiting), 'dispatching')
+})
+
+test('three rejections on one gate escalate to the user instead of looping', () => {
+  let state = activeState()
+  for (let index = 0; index < 3; index += 1) state = planReject(state)
+  const alerts = boardAlerts(state, [])
+  assert.ok(alerts.some((line) => line.includes('计划封驳已达 3 轮') && line.includes('上奏用户')))
+})
+
 test('a user /sansheng command records 御批 and gates large-tier appointments', () => {
   let state = planPass(activeState(baseEdict({ tier: 'large', rosterCap: 9 })))
   assertCode(
@@ -614,6 +673,86 @@ test('evidence must reference a completed shared task and cannot repeat itself',
   assertCode(() => validateEvidenceInput(state, args, [{ id: 'task-1', status: 'in_progress' }]), 'TASK_NOT_COMPLETED')
   const withEvidence = evidence(activeState())
   assertCode(() => validateEvidenceInput(withEvidence, { ...args, expected_revision: withEvidence.revision }, TASKS), 'DUPLICATE_EVIDENCE')
+})
+
+/* Risk, conditional approval and audit */
+
+test('high-risk edicts require explicit assumptions, risks, tools, data scope and budget', () => {
+  const empty = createEmptyState()
+  const base = {
+    goal: 'deploy', acceptance: ['deployed'], tier: 'medium', departments: ['工部'], expected_revision: 0,
+  }
+  assertCode(() => validateEdictInput(empty, { ...base, risk_level: 'high' }), 'RISK_ANALYSIS_REQUIRED')
+  const edict = validateEdictInput(empty, {
+    ...base,
+    risk_level: 'high',
+    assumptions: ['workspace writable'],
+    risks: ['deploy may fail'],
+    tools: ['bash'],
+    data_scope: ['src/'],
+    budget: '40 tool calls',
+  })
+  assert.equal(edict.riskLevel, 'high')
+  assert.deepEqual(edict.tools, ['bash'])
+})
+
+test('high-risk work needs a real user approval before appointment', () => {
+  let state = planPass(activeState(riskEdict()))
+  assertCode(
+    () => validateAppointInput(state, { member: 'gongbu', department: '工部', expected_revision: state.revision }, LEAD),
+    'USER_APPROVAL_REQUIRED',
+  )
+  state = foldEvent(state, {
+    type: 'command/run',
+    time: 1700000000000,
+    data: { name: 'sansheng', args: 'approve 允许部署', source: { kind: 'user' } },
+  })
+  const result = validateAppointInput(state, { member: 'gongbu', department: '工部', expected_revision: state.revision }, LEAD)
+  assert.equal(result.role, '工具与基础设施')
+})
+
+test('conditional plan approval requires a passing independent audit at close', () => {
+  let state = appointment(planPass(activeState(), { conditions: ['rollback plan exists', 'owner on call'] }))
+  state = evidence(state)
+  state = resultPass(state)
+  assertCode(
+    () => validateCloseInput(state, { conclusions: ['done'], deliverables: ['src'], expected_revision: state.revision }, TASKS, LEAD),
+    'GATE_CONDITIONS_UNMET',
+  )
+  state = audit(state, { scope: 'plan', auditor: 'shenji', conditionsMet: ['rollback plan exists', 'owner on call'] })
+  const report = validateCloseInput(state, { conclusions: ['done'], deliverables: ['src'], expected_revision: state.revision }, TASKS, LEAD)
+  assert.deepEqual(report.conclusions, ['done'])
+})
+
+test('audit is independent: not Lead, not the gate reviewer, not a task owner; 刑部 may audit', () => {
+  const state = planPass(activeState(), { conditions: ['c1'] })
+  const base = { scope: 'plan', verdict: 'pass', checks: ['checked'], conditions_met: ['c1'], expected_revision: state.revision }
+  assertCode(() => validateAuditInput(state, base, TASKS, LEAD), 'AUDITOR_MUST_BE_TEAMMATE')
+  assertCode(() => validateAuditInput(state, base, TASKS, REVIEWER), 'AUDITOR_MUST_BE_INDEPENDENT')
+  assertCode(() => validateAuditInput(state, base, TASKS, WORKER), 'AUDITOR_IS_EXECUTOR')
+  const xingbu = { role: 'teammate', name: 'xingbu' }
+  const xingbuState = append(planPass(activeState(), { conditions: ['c1'] }), 'appoint', {
+    appointment: { id: 'ap-xingbu', member: 'xingbu', department: '刑部', responsibility: null, writeScopes: [], createdAt: null },
+  })
+  assert.equal(validateAuditInput(xingbuState, { ...base, expected_revision: xingbuState.revision }, TASKS, xingbu).scope, 'plan')
+})
+
+test('high-risk close requires a passing result audit after the result gate', () => {
+  let state = planPass(activeState(riskEdict()))
+  state = foldEvent(state, {
+    type: 'command/run', time: 1700000000000,
+    data: { name: 'sansheng', args: 'approve 允许部署', source: { kind: 'user' } },
+  })
+  state = appointment(state)
+  state = evidence(state)
+  state = resultPass(state)
+  assertCode(
+    () => validateCloseInput(state, { conclusions: ['done'], deliverables: ['src'], expected_revision: state.revision }, TASKS, LEAD),
+    'HIGH_RISK_AUDIT_REQUIRED',
+  )
+  state = audit(state, { scope: 'result', auditor: 'shenji', checks: ['delivery checked'] })
+  const report = validateCloseInput(state, { conclusions: ['done'], deliverables: ['src'], expected_revision: state.revision }, TASKS, LEAD)
+  assert.deepEqual(report.conclusions, ['done'])
 })
 
 /* Workstreams */

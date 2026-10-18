@@ -99,16 +99,37 @@ The mode separates **decision, review and execution**, then turns good intention
 
 > **政事堂 is not a fourth department**: it is the Lead's coordinating seat. The same Lead switches hats between 中书省 (drafting) and 尚书省 (dispatch/summary); 门下省 is the genuinely independent reviewer.
 
+### Case state machine (12 phases)
+
+Phases are derived from the session event log; no second state store is kept. `sansheng_board` exposes `phase`:
+
+| Phase | Meaning |
+|---|---|
+| `idle` | mode not entered |
+| `intake` | entered, no edict yet |
+| `plan_review` | plan awaiting/receiving review |
+| `plan_rejected` | plan rejected by 门下省 |
+| `awaiting_human` | large/high-risk plan waits for `/sansheng approve` |
+| `dispatching` | plan passed, awaiting 尚书省 appointment |
+| `executing` | ministries executing |
+| `result_rejected` | delivery rejected |
+| `auditing` | conditional/high-risk work awaiting independent audit |
+| `ready_to_close` | both gates and audits satisfied |
+| `closed` | case closed |
+| `abandoned` | explicitly abandoned |
+
+After **3 rejections on one gate**, automatic looping stops and the board escalates to the user.
+
 ```mermaid
 flowchart TD
     U(["User / 皇上"]) --> ENTRY{"Entry"}
     ENTRY -->|"New task: 三省六部 preset"| ZS["中书省 · Lead drafting"]
     ENTRY -->|"Existing session: sansheng_mode enter"| ZS
-    ZS -->|"sansheng_edict<br/>goal · acceptance · tier · roster · departments · workstreams"| EDICT[["Edict drafted"]]
+    ZS -->|"sansheng_edict<br/>goal · acceptance · assumptions · risks · tools · data scope · tier · budget"| EDICT[["Edict drafted"]]
     EDICT -->|"spawn_teammate / send_message"| REVIEW["门下省 · independent reviewer"]
     REVIEW -->|"sansheng_gate kind=plan"| PG{"Plan gate"}
     PG -->|"reject · defects"| EDICT
-    PG -->|"pass"| LARGE{"tier = large?"}
+    PG -->|"pass"| LARGE{"large / high risk?"}
     LARGE -->|"yes"| HUMAN{"User /sansheng approve"}
     HUMAN -->|"reject"| EDICT
     HUMAN -->|"approve"| SS["尚书省 · Lead dispatch<br/>sansheng_appoint · team_task_create"]
@@ -117,16 +138,21 @@ flowchart TD
     EXEC -->|"task completed"| EVID["刑部 · sansheng_evidence<br/>command · exit_code · digest · excerpt · workstream_id"]
     EVID --> RG{"Result gate"}
     RG -->|"reject · new evidence"| EXEC
-    RG -->|"pass · different reviewer + per-task reviews"| CLOSE["尚书省 · Lead summary<br/>sansheng_close"]
+    RG -->|"pass · different reviewer + per-task reviews"| COND{"conditions / high risk?"}
+    COND -->|"yes"| AUDIT["independent audit · 刑部 or unappointed member<br/>sansheng_audit"]
+    COND -->|"no"| CLOSE["尚书省 · Lead summary<br/>sansheng_close"]
+    AUDIT -->|"pass · every condition confirmed"| CLOSE
     CLOSE --> DONE(["Report to 皇上 · closed"])
     ZS -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["Abandon explicitly"])
 ```
 
-> A rejected plan must be re-drafted; a rejected result needs fresh evidence. Large-tier work needs a real user `/sansheng approve` before dispatch. Leaving an open case requires closing it or an explicit `abandon_reason`.
+> A rejected plan must be re-drafted; a rejected result needs fresh evidence. Large or high/irreversible work needs a real user `/sansheng approve` before dispatch; a gate may attach `conditions`, which need a newer passing independent audit before close; high-risk results also need a result audit. Leaving an open case requires closing it or an explicit `abandon_reason`.
+>
+> **Target model ≠ current build**: this plugin has no unified execution gateway, approval-token validation or six-ministry capability isolation yet; see [docs/architecture.md](docs/architecture.md).
 
 Hard invariants since 0.2.0: stale revisions are rejected; a rejected plan must be re-drafted and a rejected result needs new evidence; plan and result gates need different reviewers, and reviewers may not own a shared task; passes cite `checked` items; evidence only covers completed tasks and needs a hex digest plus excerpt; leaving an open case requires `abandon_reason`; closing rejects unfinished shared tasks.
 
-Since 0.2.2: large-tier appointments need a real user `/sansheng approve` recorded after the plan gate (a model claim is not enough); `/sansheng reject` blocks dispatch until the plan is revised and re-reviewed. Board alerts escalate a stalled board at 30 / 60 / 120 minutes (inspect → interrupt/reassign or report → user decides).
+Since 0.2.2: large-tier appointments need a real user `/sansheng approve` recorded after the plan gate (a model claim is not enough); `/sansheng reject` blocks dispatch until the plan is revised and re-reviewed. Board alerts escalate a stalled board at 30 / 60 / 120 minutes (inspect → interrupt/reassign or report → user decides). Since 0.5.0: high/irreversible risk also needs real-user approval; high-risk edicts need assumptions/risks/tools/data_scope/budget; a gate may carry `conditions`; `sansheng_audit` provides independent condition/high-risk checks and close requires the relevant passing audit.
 
 Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The board's 详细历史 tab keeps a bounded case-level log of message text, tool arguments/results and teammate inbox deliveries, filterable and expandable, with assistant reasoning deliberately excluded. Member-internal trajectories are not copied into the board; open the member session from the native Agent Team panel or the sidebar for the original Chat / Trajectory view. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 / 详细历史 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
 
@@ -135,9 +161,10 @@ Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {acti
 | Tool | Caller | Purpose |
 |---|---|---|
 | `sansheng_mode` | Lead (status: any member) | enter / leave / inspect the mode |
-| `sansheng_edict` | Lead | goal, acceptance, boundaries, tier, roster cap, departments |
+| `sansheng_edict` | Lead | goal, acceptance, boundaries, tier, roster, departments, assumptions, risks, tools, data scope, budget |
 | `sansheng_appoint` | Lead | appoint one teammate to one 部 |
-| `sansheng_gate` | independent teammate | plan/result verdict; rejection needs defects |
+| `sansheng_gate` | independent teammate | plan/result verdict; rejection needs defects; a pass may carry conditions |
+| `sansheng_audit` | independent teammate (刑部 or unappointed) | condition/high-risk audit; auditor cannot own a task or be the gate reviewer |
 | `sansheng_evidence` | any member | command, exit code, digest, bounded excerpt, task id |
 | `sansheng_close` | Lead | five-part closing report |
 | `sansheng_board` | any member | compact board state |
@@ -156,12 +183,18 @@ Tool-enforced, not prompt-enforced:
 | rejection without defects | `INVALID_FIELD` |
 | pass carrying blocking defects | `DEFECTS_ON_PASS` |
 | result gate without evidence | `NO_EVIDENCE_TO_REVIEW` |
+| large/high-risk dispatch without real user approval | `USER_APPROVAL_REQUIRED` |
+| high-risk edict without assumptions/risks/tools/data scope/budget | `RISK_ANALYSIS_REQUIRED` |
+| conditional gate without a newer passing audit | `GATE_CONDITIONS_UNMET` |
+| high-risk close without a result audit | `HIGH_RISK_AUDIT_REQUIRED` |
+| Lead or gate reviewer tries to audit | `AUDITOR_MUST_BE_TEAMMATE` / `AUDITOR_MUST_BE_INDEPENDENT` |
+| task owner tries to audit | `AUDITOR_IS_EXECUTOR` |
 | roster cap exceeded | `ROSTER_CAP_EXCEEDED` |
 | one member holding several 部 | `MEMBER_ALREADY_APPOINTED` |
 | closing with uncovered completed tasks | `COMPLETED_TASK_WITHOUT_EVIDENCE` |
 | absolute or `..` write scope | `INVALID_WRITE_SCOPE` |
 
-> Honest scope: **whether a Team task may be marked complete belongs to `team_task_update`, which this plugin cannot intercept.** What it does intercept is what decides the delivery verdict: appointment, gate verdicts, and closing. Completed tasks without evidence are surfaced in the board's red zone.
+> Honest scope: **whether a Team task may be marked complete belongs to `team_task_update`, which this plugin cannot intercept.** It also cannot intercept a teammate calling host bash/fs tools directly, and it has no approval-token gateway; ministry role boundaries are declared responsibilities, not a hard sandbox. See [docs/architecture.md](docs/architecture.md). What the plugin does intercept is what decides the delivery verdict: appointment, gate verdicts, audit and closing. Completed tasks without evidence are surfaced in the board's red zone.
 
 ## The board
 

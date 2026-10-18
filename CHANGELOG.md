@@ -4,6 +4,35 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-10-19
+
+### Added
+
+- Structured edict risk fields: assumptions, risks, tools, data_scope,
+  risk_level, budget. High/irreversible edicts require all of them.
+- Risk-based real-user approval: large tier or high/irreversible risk requires
+  `/sansheng approve` after the plan gate before appointment.
+- Conditional gates: a passing plan/result gate may carry `conditions`; close
+  requires a newer passing independent audit confirming every condition.
+- `sansheng_audit`: independent teammate audit for conditions and high-risk
+  deliveries. An appointed 刑部 may audit; other appointed ministries may not;
+  the auditor cannot own a task or be the gate reviewer.
+- Six-ministry role cards on appointments and the board; the runtime guidance
+  states their responsibility boundaries.
+- Derived 12-phase case state machine (`idle` … `closed`/`abandoned`) exposed
+  as `phase` in `sansheng_board`; three rejections on one gate escalate to the
+  user instead of looping.
+- `docs/architecture.md`: explicit target-vs-current table, the host-level
+  gateway/token/per-agent-isolation gaps, and external reference implementations.
+
+### Changed
+
+- High-risk close requires a passing result audit after the result gate.
+- Board shows risk level, assumptions, risks, tools, data scope, budget,
+  appointment roles, gate conditions and audit records.
+- README flowcharts/prose document the risk/conditional/audit path and the
+  current limitations. No tag accompanies this release.
+
 ## [0.4.4] — 2026-10-19
 
 ### Changed

@@ -35,6 +35,7 @@ import {
   serializeRecord,
   summarizeBoard,
   validateAppointInput,
+  validateAuditInput,
   validateCloseInput,
   validateEdictInput,
   validateEvidenceInput,
@@ -76,6 +77,12 @@ function stateSchema() {
     tier: zod.string(),
     rosterCap: zod.number(),
     departments: zod.array(zod.string()),
+    assumptions: zod.array(zod.string()),
+    risks: zod.array(zod.string()),
+    tools: zod.array(zod.string()),
+    dataScope: zod.array(zod.string()),
+    riskLevel: zod.string(),
+    budget: zod.string().nullable(),
     workstreams: zod.array(zod.object({
       id: zod.string(),
       department: zod.string(),
@@ -91,6 +98,8 @@ function stateSchema() {
     member: zod.string(),
     department: zod.string(),
     responsibility: zod.string().nullable(),
+    role: zod.string().nullable(),
+    roleDuty: zod.string().nullable(),
     writeScopes: zod.array(zod.string()),
     createdAt: zod.number().nullable(),
   })
@@ -101,6 +110,7 @@ function stateSchema() {
     reviewer: zod.string(),
     defects: zod.array(zod.string()),
     checked: zod.array(zod.string()),
+    conditions: zod.array(zod.string()),
     reviews: zod.array(zod.object({
       taskId: zod.string(),
       workstreamId: zod.string().nullable(),
@@ -124,6 +134,18 @@ function stateSchema() {
     rev: zod.number().nullable(),
     createdAt: zod.number().nullable(),
   })
+  const audit = zod.object({
+    id: zod.string(),
+    scope: zod.string(),
+    verdict: zod.string(),
+    auditor: zod.string(),
+    checks: zod.array(zod.string()),
+    conditionsMet: zod.array(zod.string()),
+    defects: zod.array(zod.string()),
+    summary: zod.string().nullable(),
+    rev: zod.number().nullable(),
+    createdAt: zod.number().nullable(),
+  })
   const closure = zod.object({
     id: zod.string(),
     conclusions: zod.array(zod.string()),
@@ -139,6 +161,7 @@ function stateSchema() {
     appointments: zod.array(appointment),
     gates: zod.array(gate),
     evidence: zod.array(evidence),
+    audits: zod.array(audit),
     closure: closure.nullable(),
     abandoned: zod.object({ reason: zod.string(), at: zod.number().nullable() }).nullable(),
     approvals: zod.array(zod.object({
@@ -481,7 +504,7 @@ export function apply(ctx, config = {}) {
 
   registerTool({
     name: 'sansheng_edict',
-    description: 'Draft or revise the 制敕 (edict): goal, acceptance criteria, boundaries, task tier, roster cap, and the 六部 departments this job needs. Lead-only. Requires the mode to be active. The mode requires the edict before any appointment.',
+    description: 'Draft or revise the 制敕 (edict): goal, acceptance criteria, boundaries, task tier, roster cap, departments, and optional assumptions/risks/tools/data_scope/risk_level/budget. High/irreversible risk requires the analysis fields. Lead-only. Requires the mode to be active. The mode requires the edict before any appointment.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -510,6 +533,35 @@ export function apply(ctx, config = {}) {
           type: 'array',
           items: { type: 'string' },
           description: 'Executing ministries this job needs, e.g. 工部, 刑部, 礼部.',
+        },
+        assumptions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Explicit assumptions the plan depends on. Required for high/irreversible risk.',
+        },
+        risks: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Risk pre-assessment. Required for high/irreversible risk.',
+        },
+        tools: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Host tools the plan intends to use (declaration, not a hard sandbox). Required for high/irreversible risk.',
+        },
+        data_scope: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Data/path scope the plan may touch. Required for high/irreversible risk.',
+        },
+        risk_level: {
+          type: 'string',
+          enum: ['low', 'medium', 'high', 'irreversible'],
+          description: 'Risk class; high/irreversible also requires a real user /sansheng approve after the plan gate.',
+        },
+        budget: {
+          type: 'string',
+          description: 'Cost/resource budget note (e.g. "max 40 tool calls"). Required for high/irreversible risk.',
         },
         workstreams: {
           type: 'array',
@@ -603,6 +655,8 @@ export function apply(ctx, config = {}) {
         member: normalized.member,
         department: normalized.department,
         responsibility: normalized.responsibility,
+        role: normalized.role,
+        roleDuty: normalized.roleDuty,
         writeScopes: normalized.writeScopes,
         createdAt: Date.now(),
       }
@@ -612,7 +666,7 @@ export function apply(ctx, config = {}) {
 
   registerTool({
     name: 'sansheng_gate',
-    description: 'Record one 门下省 review verdict on the plan (`kind: "plan"`) or on the delivery (`kind: "result"`). Must be called by an independent teammate — never the Lead, never a member appointed to a 六部, never a shared-task owner; plan and result need different reviewers. A pass must cite checked items; a passing result gate needs one reviews entry per completed task. A rejection must carry blocking defects and forces a revised plan or fresh evidence.',
+    description: 'Record one 门下省 review verdict on the plan (`kind: "plan"`) or on the delivery (`kind: "result"`). Must be called by an independent teammate — never the Lead, never a member appointed to a 六部, never a shared-task owner; plan and result need different reviewers. A pass must cite checked items and may carry approval conditions; a passing result gate needs one reviews entry per completed task. A rejection must carry blocking defects and forces a revised plan or fresh evidence.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -629,6 +683,11 @@ export function apply(ctx, config = {}) {
           type: 'array',
           items: { type: 'string' },
           description: 'What the reviewer actually checked (acceptance items, evidence records). Required for a passing verdict.',
+        },
+        conditions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional conditions attached to a passing verdict (conditional approval). Close requires an independent audit confirming every condition.',
         },
         reviews: {
           type: 'array',
@@ -665,6 +724,7 @@ export function apply(ctx, config = {}) {
         reviewer: caller.name,
         defects: normalized.defects,
         checked: normalized.checked,
+        conditions: normalized.conditions,
         reviews: normalized.reviews,
         summary: normalized.summary,
         rev: revision,
@@ -681,6 +741,69 @@ export function apply(ctx, config = {}) {
         }
       }
       return serializeRecord('gate', { rev: revision, by: caller.name, gate })
+    },
+  })
+
+  registerTool({
+    name: 'sansheng_audit',
+    description: 'Record one independent audit (independent teammate, not the Lead). Used for conditional approvals and high-risk deliveries. An appointed 刑部 member may audit; any other appointed ministry member may not. The auditor cannot own a shared task or be the same person as the gate reviewer. A passing audit of a gate with conditions must confirm every condition.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        scope: { type: 'string', enum: ['plan', 'result'], description: 'Gate scope being audited.' },
+        verdict: { type: 'string', enum: ['pass', 'reject'], description: 'pass: audit clears the scope. reject: record defects.' },
+        checks: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'What the auditor actually checked. Required.',
+        },
+        conditions_met: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Gate conditions confirmed; a passing audit must list every condition.',
+        },
+        defects: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Blocking defects; required for a rejecting audit.',
+        },
+        summary: { type: 'string', description: 'One-line audit statement.' },
+        expected_revision: {
+          type: 'integer',
+          description: 'Board revision read from sansheng_board.',
+        },
+      },
+      required: ['scope', 'verdict', 'checks', 'expected_revision'],
+    },
+    output: textOutput,
+    async execute(args, exec) {
+      const agent = requireAgent(exec, 'sansheng_audit')
+      const caller = memberOf(agent)
+      const state = boardOf(agent)
+      const normalized = validateAuditInput(boardView(agent), args, tasksOf(agent), caller)
+      const revision = reserveRevision(agent)
+      const audit = {
+        id: `audit-${state.audits.length + 1}`,
+        scope: normalized.scope,
+        verdict: normalized.verdict,
+        auditor: caller.name,
+        checks: normalized.checks,
+        conditionsMet: normalized.conditionsMet,
+        defects: normalized.defects,
+        summary: normalized.summary,
+        rev: revision,
+        createdAt: Date.now(),
+      }
+      if (caller.role === 'teammate') {
+        try {
+          await publishToLead(agent, serializeMessageRecord('audit', { rev: revision, by: caller.name, audit }), exec.signal)
+        } catch (error) {
+          releaseRevision(agent, revision)
+          throw error
+        }
+      }
+      return serializeRecord('audit', { rev: revision, by: caller.name, audit })
     },
   })
 
@@ -742,7 +865,7 @@ export function apply(ctx, config = {}) {
 
   registerTool({
     name: 'sansheng_close',
-    description: 'Close the case (结案) with the five-part report: conclusions, deliverables, evidence, residual unknowns, and next steps. Lead-only. Rejected until both gates passed, every shared task is completed/deleted, and every completed task has evidence. This is the hard completion gate: do not claim the job is done before it returns.',
+    description: 'Close the case (结案) with the five-part report: conclusions, deliverables, evidence, residual unknowns, and next steps. Lead-only. Rejected until both gates passed, every shared task is completed/deleted, every completed task has evidence, every conditional gate has a newer passing audit, and high-risk work has a result audit. This is the hard completion gate: do not claim the job is done before it returns.',
     parameters: {
       type: 'object',
       additionalProperties: false,

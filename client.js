@@ -147,11 +147,26 @@ window.__ModuleLoader__.load({
 
 		function gateBadge(gate) {
 			if (gate === null) return h("span", { className: "dss-badge dss-badge-pending" }, "待审");
+			const conditional = gate.verdict === "pass" && Array.isArray(gate.conditions) && gate.conditions.length > 0;
 			return h(
 				"span",
 				{ className: "dss-badge dss-badge-" + (gate.verdict === "pass" ? "pass" : "reject") },
-				gate.verdict === "pass" ? "通过" : "封驳",
+				conditional ? "有条件通过" : gate.verdict === "pass" ? "通过" : "封驳",
 			);
+		}
+
+		function latestAudit(board, scope) {
+			const audits = Array.isArray(board.audits) ? board.audits : [];
+			for (let index = audits.length - 1; index >= 0; index -= 1) {
+				if (audits[index].scope === scope) return audits[index];
+			}
+			return null;
+		}
+
+		function needsHuman(board) {
+			const edict = board.edict;
+			if (edict === null) return false;
+			return edict.tier === "large" || edict.riskLevel === "high" || edict.riskLevel === "irreversible";
 		}
 
 		function fmtTime(value) {
@@ -172,6 +187,7 @@ window.__ModuleLoader__.load({
 				evidence: "取证",
 				close: "结案",
 				approval: "御批",
+				audit: "审计",
 				denied: "拒绝",
 			})[op] ?? op;
 		}
@@ -180,6 +196,7 @@ window.__ModuleLoader__.load({
 			if (entry.op === "denied") return "dss-event-denied";
 			if (entry.op === "gate") return entry.verdict === "pass" ? "dss-event-pass" : "dss-event-reject";
 			if (entry.op === "approval") return entry.decision === "approve" ? "dss-event-pass" : "dss-event-reject";
+			if (entry.op === "audit") return entry.verdict === "pass" ? "dss-event-pass" : "dss-event-reject";
 			if (entry.op === "mode" || entry.op === "edict" || entry.op === "appoint") return "dss-event-info";
 			return "";
 		}
@@ -203,6 +220,9 @@ window.__ModuleLoader__.load({
 					return "结案：" + String((entry.conclusions ?? [])[0] ?? "");
 				case "approval":
 					return "御批" + (entry.decision === "approve" ? "准奏" : "封驳") + (entry.reason ? "：" + entry.reason : "");
+				case "audit":
+					return "独立审计 " + (entry.scope === "plan" ? "计划" : "成果") + " " + (entry.verdict === "pass" ? "通过" : "驳回")
+						+ (entry.conditionsMet ? " · 条件 " + entry.conditionsMet + " 项" : "");
 				case "denied":
 					return "拒绝 " + String(entry.code ?? "") + "：" + String(entry.message ?? "").replace(/^[A-Z_]+:\s*/, "");
 				default:
@@ -216,7 +236,7 @@ window.__ModuleLoader__.load({
 			if (approval !== null && plan !== null && approval.rev > plan.rev) {
 				return approval.decision === "approve" ? "已准奏" : "已封驳";
 			}
-			if (board.edict !== null && board.edict.tier === "large" && plan !== null && plan.verdict === "pass") return "待御批";
+			if (board.edict !== null && needsHuman(board) && plan !== null && plan.verdict === "pass") return "待御批";
 			return "—";
 		}
 
@@ -261,6 +281,7 @@ window.__ModuleLoader__.load({
 					"div",
 					{ className: "dss-row" },
 					h("span", { className: "dss-badge dss-badge-info" }, edict.tier),
+					h("span", { className: "dss-badge " + (edict.riskLevel === "low" ? "dss-badge-info" : edict.riskLevel === "medium" ? "dss-badge-pending" : "dss-badge-reject") }, "风险 " + String(edict.riskLevel ?? "low")),
 					h("span", { className: "dss-muted" }, "编制上限 " + edict.rosterCap + " 人"),
 					edict.departments.length > 0
 						? h("span", { className: "dss-muted" }, "· " + edict.departments.join(" / "))
@@ -273,6 +294,23 @@ window.__ModuleLoader__.load({
 					? h("div", null,
 						h("div", { className: "dss-row" }, h("strong", null, "边界")),
 						h("ul", { className: "dss-list" }, edict.boundaries.map((item, index) => h("li", { key: "b" + index }, item))))
+					: null,
+				(edict.assumptions ?? []).length > 0
+					? h("div", null, h("div", { className: "dss-row" }, h("strong", null, "假设")),
+						h("ul", { className: "dss-list" }, edict.assumptions.map((item, index) => h("li", { key: "as" + index }, item))))
+					: null,
+				(edict.risks ?? []).length > 0
+					? h("div", null, h("div", { className: "dss-row" }, h("strong", null, "风险预判")),
+						h("ul", { className: "dss-list" }, edict.risks.map((item, index) => h("li", { key: "r" + index }, item))))
+					: null,
+				(edict.tools ?? []).length > 0
+					? h("div", { className: "dss-row" }, h("strong", null, "工具"), h("span", { className: "dss-muted dss-mono" }, edict.tools.join(", ")))
+					: null,
+				(edict.dataScope ?? []).length > 0
+					? h("div", { className: "dss-row" }, h("strong", null, "数据范围"), h("span", { className: "dss-muted dss-mono" }, edict.dataScope.join(", ")))
+					: null,
+				edict.budget
+					? h("div", { className: "dss-row" }, h("strong", null, "预算"), h("span", { className: "dss-muted" }, edict.budget))
 					: null,
 			);
 		}
@@ -319,6 +357,7 @@ window.__ModuleLoader__.load({
 						{ className: "dss-row", key: appointment.id },
 						h("strong", null, appointment.department),
 						h("span", { className: "dss-muted" }, "← " + appointment.member),
+						appointment.role ? h("span", { className: "dss-badge dss-badge-pending" }, appointment.role) : null,
 						appointment.writeScopes.length > 0
 							? h("span", { className: "dss-muted dss-mono" }, appointment.writeScopes.join(", "))
 							: null,
@@ -347,6 +386,24 @@ window.__ModuleLoader__.load({
 			if (missing.length > 0) warnings.push("已完成任务缺少证据：" + missing.map((task) => task.id).join(", ") + "。");
 			if (open.length > 0) warnings.push("未完成任务：" + open.map((task) => task.id).join(", ") + "。");
 			if (result !== null && result.verdict === "reject") warnings.push("成果被门封驳：补充新证据后再审。");
+			if (board.edict !== null && needsHuman(board) && plan !== null && plan.verdict === "pass" && board.closure === null) {
+				const approvals = Array.isArray(board.approvals) ? board.approvals : [];
+				const approval = approvals.length === 0 ? null : approvals[approvals.length - 1];
+				if (approval === null || approval.rev <= plan.rev) warnings.push("large/高风险计划等待御批：请用户运行 /sansheng approve 或 /sansheng reject。");
+			}
+			for (const [scope, text] of [["plan", "计划门"], ["result", "成果门"]]) {
+				const gate = latestGate(board, scope);
+				const conditions = gate !== null && Array.isArray(gate.conditions) ? gate.conditions : [];
+				if (conditions.length > 0) {
+					const audit = latestAudit(board, scope);
+					if (audit === null || audit.verdict !== "pass" || audit.rev <= gate.rev) warnings.push(text + "为有条件通过：需要独立审计确认条件。");
+				}
+			}
+			if (board.edict !== null && (board.edict.riskLevel === "high" || board.edict.riskLevel === "irreversible")) {
+				const audit = latestAudit(board, "result");
+				const gate = latestGate(board, "result");
+				if (audit === null || audit.verdict !== "pass" || (gate !== null && audit.rev <= gate.rev)) warnings.push("高风险案件：结案前需要独立的成果审计。");
+			}
 			if (result !== null && result.verdict === "pass") {
 				const reviewed = reviewedIds(result);
 				const unreviewed = completed.filter((task) => reviewed.has(task.id) === false);
@@ -483,6 +540,11 @@ window.__ModuleLoader__.load({
 						h("div", { className: "dss-row" }, h("strong", null, "封驳缺陷")),
 						h("ul", { className: "dss-defects" }, gate.defects.map((item, index) => h("li", { key: "x" + index }, item))))
 					: null,
+				(Array.isArray(gate.conditions) && gate.conditions.length > 0)
+					? h("div", null,
+						h("div", { className: "dss-row" }, h("strong", null, "通过条件")),
+						h("ul", { className: "dss-list" }, gate.conditions.map((item, index) => h("li", { key: "c" + index }, item))))
+					: null,
 				(Array.isArray(gate.reviews) && gate.reviews.length > 0)
 					? h("div", null,
 						h("div", { className: "dss-row" }, h("strong", null, "逐任务复审")),
@@ -492,6 +554,14 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function AuditList(props) {
+			const audits = Array.isArray(props.board.audits) ? props.board.audits : [];
+			if (audits.length === 0) return h("p", { className: "dss-empty" }, "尚未独立审计。");
+			return h("ul", { className: "dss-list" }, audits.slice().reverse().map((audit, index) => h("li", { key: "audit" + index },
+				(audit.scope === "plan" ? "计划" : "成果") + " · " + audit.auditor + " · " + (audit.verdict === "pass" ? "通过" : "驳回")
+				+ (audit.conditionsMet.length > 0 ? " · 条件 " + audit.conditionsMet.length + " 项" : ""))));
+		}
+
 		function GatesTab(props) {
 			const { board } = props;
 			return h(
@@ -499,6 +569,7 @@ window.__ModuleLoader__.load({
 				null,
 				h("div", { className: "dss-section" }, h("h4", null, "计划门 · 门下省（第 " + String(board.planRounds ?? 1) + " 轮）"), h(GateDetail, { gate: latestGate(board, "plan"), kind: "计划门", round: board.planRounds ?? 1 })),
 				h("div", { className: "dss-section" }, h("h4", null, "成果门 · 门下省（第 " + String(board.resultRounds ?? 1) + " 轮）"), h(GateDetail, { gate: latestGate(board, "result"), kind: "成果门", round: board.resultRounds ?? 1 })),
+				h("div", { className: "dss-section" }, h("h4", null, "独立审计 · 刑部/独立成员"), h(AuditList, { board })),
 			);
 		}
 

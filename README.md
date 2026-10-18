@@ -118,16 +118,37 @@ dsh plugin --profile web add dsh-experimental-sansheng
 
 > **政事堂不是第四省**：它是 Lead 的协调位。同一位 Lead 在“中书省（拟旨）→ 尚书省（派发/汇总）”之间切换帽子；真正独立的是门下省。
 
+### 案卷状态机（12 态）
+
+状态不额外存储，由会话事件日志派生；`sansheng_board` 的 `phase` 字段直接可见：
+
+| 状态 | 含义 |
+|---|---|
+| `idle` | 未进入模式 |
+| `intake` | 已进入，尚未拟旨 |
+| `plan_review` | 计划待审/审议中 |
+| `plan_rejected` | 计划被门下封驳 |
+| `awaiting_human` | large/高风险计划等待 `/sansheng approve` |
+| `dispatching` | 计划已过门，待尚书省派工 |
+| `executing` | 六部执行中 |
+| `result_rejected` | 成果被门下封驳 |
+| `auditing` | 有条件通过或高风险，等待独立审计 |
+| `ready_to_close` | 两门通过、证据/审计齐备，可结案 |
+| `closed` | 已结案 |
+| `abandoned` | 显式放弃 |
+
+同一门 **封驳 ≥3 轮** 时停止自动循环，告警升级为用户裁决（见红区）。
+
 ```mermaid
 flowchart TD
     U(["皇上 / 用户"]) --> ENTRY{"入口"}
     ENTRY -->|"新任务选「三省六部」预设"| ZS["中书省 · Lead 接旨拟旨"]
     ENTRY -->|"已有会话：sansheng_mode enter"| ZS
-    ZS -->|"sansheng_edict<br/>目标 · 验收 · 档位 · 编制 · 部门 · workstreams"| EDICT[["制敕已立"]]
+    ZS -->|"sansheng_edict<br/>目标 · 验收 · 假设 · 风险 · 工具 · 数据范围 · 档位 · 预算"| EDICT[["制敕已立"]]
     EDICT -->|"spawn_teammate / send_message"| REVIEW["门下省 · 独立评审"]
     REVIEW -->|"sansheng_gate kind=plan"| PG{"计划门"}
     PG -->|"reject · 封驳 + defects"| EDICT
-    PG -->|"pass"| LARGE{"tier = large?"}
+    PG -->|"pass"| LARGE{"large / high risk?"}
     LARGE -->|"是"| HUMAN{"用户 /sansheng approve"}
     HUMAN -->|"reject"| EDICT
     HUMAN -->|"approve"| SS["尚书省 · Lead 派发<br/>sansheng_appoint · team_task_create"]
@@ -136,12 +157,17 @@ flowchart TD
     EXEC -->|"任务 completed"| EVID["刑部 · sansheng_evidence<br/>command · exit_code · digest · excerpt · workstream_id"]
     EVID --> RG{"成果门"}
     RG -->|"reject · 补新证据"| EXEC
-    RG -->|"pass · 另一评审者 + 逐任务 reviews"| CLOSE["尚书省 · Lead 汇总回奏<br/>sansheng_close"]
+    RG -->|"pass · 另一评审者 + 逐任务 reviews"| COND{"有条件 / 高风险?"}
+    COND -->|"是"| AUDIT["独立审计 · 刑部/独立成员<br/>sansheng_audit"]
+    COND -->|"否"| CLOSE["尚书省 · Lead 汇总回奏<br/>sansheng_close"]
+    AUDIT -->|"pass · 条件全部确认"| CLOSE
     CLOSE --> DONE(["回奏皇上 · 结案"])
     ZS -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["显式放弃"])
 ```
 
-> 计划被封驳 → 改旨重审；成果被封驳 → 补新证据再审。large 档必须由用户 `/sansheng approve` 后才能派工；离开模式必须先结案或显式放弃。
+> 计划被封驳 → 改旨重审；成果被封驳 → 补新证据再审。large 或 high/irreversible 风险必须由用户 `/sansheng approve` 后才能派工；门禁可带 `conditions`，结案前须由独立审计逐条确认；高风险成果还需结果审计。离开模式必须先结案或显式放弃。
+>
+> **目标态 ≠ 当前实现**：本插件还没有统一的工具网关、批准令牌校验或六部权限隔离；详见 [docs/architecture.md](docs/architecture.md)。
 
 硬约束（0.2.0 起）：
 
@@ -152,7 +178,10 @@ flowchart TD
 - **证据硬化**：证据只能覆盖**已完成**任务，必须带十六进制 `digest` 和非空 `excerpt`，重复证据被拒。
 - **离开模式**：必须先 `sansheng_close`，或传 `abandon_reason` 显式放弃（看板记录）。
 - **结案**：所有共享任务必须处于 completed/deleted，不能带着未完成任务结案。
-- **御批（large 任务）**：计划门通过后，用户需在 Lead 会话运行 `/sansheng approve [备注]`（或 `/sansheng reject [备注]`）才能任命六部；模型自称用户同意无效，御批来自会话日志里的真实 `command/run` 事件。
+- **御批（large / 高风险）**：计划门通过后，large 档或 `risk_level=high/irreversible` 需用户在 Lead 会话运行 `/sansheng approve [备注]`（或 reject）才能任命六部；模型自称用户同意无效，御批来自真实 `command/run` 事件。
+- **假设与风险**：high/irreversible 制敕必须列出 assumptions、risks、tools、data_scope 和 budget，否则 `RISK_ANALYSIS_REQUIRED`。
+- **有条件通过**：`sansheng_gate` 的 pass 可带 `conditions`；结案前必须有更新的独立审计逐条确认，否则 `GATE_CONDITIONS_UNMET`。
+- **独立审计**：`sansheng_audit` 只能由独立 teammate 调用；刑部可审，其他被任命部门不可；审计者不能拥有任务或担任该门评审者；高风险结案必须有通过的 result 审计。
 - **停滞升级**：看板 30 分钟无新记录→先查停滞成员；60 分钟→interrupt/reassign 或上奏；120 分钟→必须由用户决定，不得自行放宽验收。
 
 任意成员都可以随时 `sansheng_board` 读当前看板；Lead 可以 `sansheng_mode {action:"status"}` 查看摘要。看板的「详细历史」页签保留案卷级事件历史：消息正文、工具调用参数/结果、团队来信，按时间排列、可筛选可展开（不含模型思考，最多保留最近 240 条 / 120k 字符）。成员内部轨迹不复制进看板，请从官方 Agent Team 面板或侧栏的成员会话打开 DSH 原生 Chat / Trajectory。会话页头的「三省六部」按钮会打开完整看板抽屉：**总览 / 任务 / 审议 / 证据 / 时间线 / 详细历史**六个页签；模式激活时会自动打开。时间线包含被拒绝的调用（denied）与所有模式/拟旨/任命/审议/取证/结案记录，模式激活后会保留最近 200 条。
@@ -162,9 +191,10 @@ flowchart TD
 | 工具 | 调用者 | 作用 |
 |---|---|---|
 | `sansheng_mode` | Lead（status 任意成员） | 进入/离开/查看模式 |
-| `sansheng_edict` | Lead | 拟旨：目标、验收、边界、档位、编制上限、部门 |
+| `sansheng_edict` | Lead | 拟旨：目标、验收、边界、档位、编制、部门、假设、风险、工具、数据范围、预算 |
 | `sansheng_appoint` | Lead | 任命一个 部（一人一部，写作用域仅提示） |
-| `sansheng_gate` | 独立 teammate | 计划门 / 成果门：`pass` 或 `reject`（封驳必须带缺陷清单） |
+| `sansheng_gate` | 独立 teammate | 计划门 / 成果门：`pass`/`reject`（封驳必须带缺陷清单）；pass 可带 `conditions` |
+| `sansheng_audit` | 独立 teammate（刑部或独立成员） | 独立审计条件/高风险成果；审计者不能拥有任务或是该门评审者 |
 | `sansheng_evidence` | 任意成员（通常刑部） | 登记可复现证据：命令、退出码、digest、有界摘录、关联任务 |
 | `sansheng_close` | Lead | 结案/回奏：结论、交付物、残留未知、下一步 |
 | `sansheng_board` | 任意成员 | 读紧凑看板状态 |
@@ -183,12 +213,19 @@ flowchart TD
 | 封驳但没写缺陷 | `INVALID_FIELD` |
 | 通过却带“阻塞缺陷” | `DEFECTS_ON_PASS` |
 | 没有证据就要过成果门 | `NO_EVIDENCE_TO_REVIEW` |
+| large/高风险未获真实用户御批就派工 | `USER_APPROVAL_REQUIRED` |
+| 高风险制敕缺 assumptions/risks/tools/data_scope/budget | `RISK_ANALYSIS_REQUIRED` |
+| 有条件通过但没有更新的通过审计 | `GATE_CONDITIONS_UNMET` |
+| 高风险结案没有 result 审计 | `HIGH_RISK_AUDIT_REQUIRED` |
+| Lead 或该门评审者想审计 | `AUDITOR_MUST_BE_TEAMMATE` / `AUDITOR_MUST_BE_INDEPENDENT` |
+| 任务执行者想审计 | `AUDITOR_IS_EXECUTOR` |
 | 超编制上限任命 | `ROSTER_CAP_EXCEEDED` |
 | 同一成员兼任多个部 | `MEMBER_ALREADY_APPOINTED` |
 | 已完成任务缺证据就结案 | `COMPLETED_TASK_WITHOUT_EVIDENCE` |
 | 有绝对路径/`..` 的写作用域 | `INVALID_WRITE_SCOPE` |
 
 > 诚实说明：**“任务能不能标完成”本身是 Team 工具（`team_task_update`）的域，本插件拦不住**。  
+> 同样，本插件不能拦截队友直接调用宿主的 bash/fs 工具，也没有批准令牌网关；六部角色边界是责任声明，不是硬沙箱。详见 [docs/architecture.md](docs/architecture.md)。
 > 本插件拦的是**“能不能任命、能不能过门、能不能结案”**这三件真正决定交付结论的事；未过门就完成的任务会由看板红区标出。
 
 ## 专属看板

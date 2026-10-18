@@ -8,9 +8,14 @@
  * Naming note: 省 here means a government department and is read **shěng**
  * (Sān Shěng Liù Bù), never *xǐng*.
  */
+import { ministryRole } from './ministries.js'
+
 
 /** Maximum teammate count per task tier. The Lead is never counted. */
 export const TIERS = Object.freeze({ small: 0, medium: 5, large: 9 })
+
+/** Accepted edict risk levels. */
+export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'irreversible'])
 
 /** Absolute roster cap accepted regardless of tier (matches the skill's hard limit). */
 export const MAX_ROSTER_CAP = 16
@@ -26,16 +31,20 @@ export const GATE_KINDS = Object.freeze(['plan', 'result'])
  * teammate message. Tool results carry the bare JSON envelope; teammate
  * messages prefix this marker so the Lead can tell the record apart from prose.
  */
-export const RECORD_MARKER = 'SANS_RECORD_V1'
+
+const RECORD_MARKER = 'SANS_RECORD_V1'
 
 /** Record envelope version. */
 export const RECORD_VERSION = 1
 
 /** Record operations the board fold understands. */
-export const RECORD_OPS = Object.freeze(['mode', 'edict', 'appoint', 'gate', 'evidence', 'close', 'board'])
+export const RECORD_OPS = Object.freeze(['mode', 'edict', 'appoint', 'gate', 'audit', 'evidence', 'close', 'board'])
 
 /** Bounded audit history kept on the board for the timeline view. */
 export const MAX_HISTORY = 200
+
+/** Rejects on one gate before the case must be escalated to the user. */
+export const MAX_GATE_REJECTS = 3
 
 /** A stalled board is flagged after this long without any new record. */
 export const STALL_MS = 30 * 60 * 1000
@@ -70,14 +79,15 @@ export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù B
 Every mutating tool takes expected_revision (the revision you last read from sansheng_board). A stale value is rejected — read the board again, do not guess. Every committed step increments the board revision.
 
 Procedure (all state is recorded in this session's event log — never coordinate through files or temp directories):
-The Lead wears two hats: 中书省 (receiving the emperor's intent and drafting the plan) and 尚书省 (dispatching after the gates and summarizing at close). 门下省 is an independent teammate; 政事堂 is the Lead's coordinating seat, not a fourth department.
+The Lead wears two hats: 中书省 (receiving the emperor's intent and drafting the plan) and 尚书省 (dispatching after the gates and summarizing at close). 门下省 is an independent teammate; 政事堂 is the Lead's coordinating seat, not a fourth department. Ministry boundaries: 吏部=identity/permissions, 户部=budget/resources, 礼部=interaction/format, 兵部=security/incident, 刑部=audit/evidence, 工部=tools/infrastructure. These are responsibility boundaries, not a host sandbox.
 
-1. 中书省 (Lead, drafting hat) receives the intent and drafts the edict: sansheng_edict {goal, acceptance, boundaries, tier, roster_cap, departments}.
-2. 门下省 reviews the plan: an independent teammate calls sansheng_gate {kind: "plan", verdict, checked}. The Lead can never approve its own plan; a pass must cite at least one checked item. A reject must carry defects; after a reject, revise the edict before a new plan review.
-3. Only after the plan gate passes: 尚书省 (Lead, dispatch hat) uses sansheng_appoint for each teammate to one of the 六部, then creates team tasks and spawns teammates.
+1. 中书省 (Lead, drafting hat) receives the intent and drafts the edict: sansheng_edict {goal, acceptance, boundaries, tier, roster_cap, departments, assumptions, risks, tools, data_scope, risk_level, budget}. High/irreversible risk requires assumptions, risks, tools, data_scope and budget.
+2. 门下省 reviews the plan: an independent teammate calls sansheng_gate {kind: "plan", verdict, checked, conditions?}. The Lead can never approve its own plan; a pass must cite at least one checked item. Optional conditions make it a conditional pass. A reject must carry defects; after a reject, revise the edict before a new plan review.
+3. Only after the plan gate passes, and after a real user /sansheng approve when tier is large or risk_level is high/irreversible: 尚书省 (Lead, dispatch hat) uses sansheng_appoint for each teammate to one of the 六部, then creates team tasks and spawns teammates.
 4. 六部 execute. 刑部 submits evidence for a completed shared task: sansheng_evidence {task_id, command, exit_code, digest, excerpt}. A digest (hex) and a bounded excerpt are required.
-5. 门下省 reviews the result: a different teammate (never the plan reviewer, never a task owner) calls sansheng_gate {kind: "result", verdict, checked, reviews}. For a pass, reviews must cover every completed shared task with verdict "pass".
-6. Only after both gates pass, every shared task is completed or deleted, and every completed task has evidence, 尚书省 (Lead, summary hat) calls sansheng_close and reports the result.
+5. 门下省 reviews the result: a different teammate (never the plan reviewer, never a task owner) calls sansheng_gate {kind: "result", verdict, checked, conditions?, reviews}. For a pass, reviews must cover every completed shared task with verdict "pass".
+5b. Independent audit: when a gate has conditions, or the edict risk is high/irreversible, an independent teammate calls sansheng_audit {scope, verdict, checks, conditions_met?}. An appointed 刑部 may audit; other appointed ministries may not. The auditor cannot own a task or be the gate reviewer. A passing audit confirms every condition.
+6. Only after both gates pass, every shared task is completed or deleted, every completed task has evidence, every conditional gate has a newer passing audit, and high-risk work has a passing result audit, 尚书省 (Lead, summary hat) calls sansheng_close and reports the result.
 
 Leaving the mode requires a closed case or an explicit abandon_reason; abandoning is recorded on the board. Closing with unfinished shared tasks is rejected. Never claim completion before sansheng_close returns. Use sansheng_board for the current board state and revision.`
 
@@ -133,6 +143,7 @@ export function createEmptyState() {
     appointments: [],
     gates: [],
     evidence: [],
+    audits: [],
     closure: null,
     abandoned: null,
     approvals: [],
@@ -306,6 +317,24 @@ export function applyRecord(state, record, eventTime = null) {
         },
       )
     }
+    case 'audit': {
+      const audit = normalizeStoredAudit(record.audit)
+      if (audit === null) return state
+      return withHistory(
+        commit(state, { audits: [...state.audits, audit] }, revision),
+        {
+          op: 'audit',
+          rev: revision,
+          at: recordTime(record, eventTime, audit.createdAt),
+          by: audit.auditor,
+          scope: audit.scope,
+          verdict: audit.verdict,
+          checks: audit.checks.length,
+          conditionsMet: audit.conditionsMet.length,
+          defects: audit.defects,
+        },
+      )
+    }
     case 'close': {
       const closure = normalizeStoredClosure(record.closure)
       if (closure === null) return state
@@ -455,6 +484,73 @@ export function latestGate(state, kind) {
 }
 
 /**
+ * Whether the current edict needs a real user `/sansheng approve` after the
+ * plan gate before any appointment.
+ * @param {object|null} edict Current edict.
+ * @returns {boolean} True for large tier or high/irreversible risk.
+ */
+export function needsHumanApproval(edict) {
+  if (edict === null || edict === undefined) return false
+  return edict.tier === 'large' || edict.riskLevel === 'high' || edict.riskLevel === 'irreversible'
+}
+
+/**
+ * Latest independent audit for one gate scope.
+ * @param {object} state Board state.
+ * @param {'plan'|'result'} scope Gate scope.
+ * @returns {object|undefined} Latest audit.
+ */
+export function latestAudit(state, scope) {
+  for (let index = state.audits.length - 1; index >= 0; index -= 1) {
+    if (state.audits[index].scope === scope) return state.audits[index]
+  }
+  return undefined
+}
+
+/**
+ * Derive the case's explicit state from the board projection. This is a
+ * read-only view of the event fold; it never introduces a second state store.
+ * @param {object} state Board state.
+ * @returns {'idle'|'intake'|'plan_review'|'plan_rejected'|'awaiting_human'|'dispatching'|'executing'|'result_rejected'|'auditing'|'ready_to_close'|'closed'|'abandoned'} Case phase.
+ */
+export function casePhase(state) {
+  if (state.active !== true) return 'idle'
+  if (state.closure !== null) return 'closed'
+  if (state.abandoned !== null && state.abandoned !== undefined) return 'abandoned'
+  if (state.edict === null) return 'intake'
+  const plan = latestGate(state, 'plan')
+  if (plan === undefined) return 'plan_review'
+  if (plan.verdict === 'reject') return 'plan_rejected'
+  if (needsHumanApproval(state.edict)) {
+    const approvals = Array.isArray(state.approvals) ? state.approvals : []
+    const approval = approvals[approvals.length - 1]
+    if (approval !== undefined && approval.rev > plan.rev && approval.decision === 'reject') return 'plan_rejected'
+    if (approval === undefined || approval.rev <= plan.rev) return 'awaiting_human'
+  }
+  if (state.edict.tier !== 'small' && state.appointments.length === 0) return 'dispatching'
+  const result = latestGate(state, 'result')
+  if (result !== undefined && result.verdict === 'reject') return 'result_rejected'
+  if (result !== undefined && result.verdict === 'pass') {
+    for (const scope of GATE_KINDS) {
+      const gate = latestGate(state, scope)
+      const conditions = Array.isArray(gate?.conditions) ? gate.conditions : []
+      if (conditions.length > 0) {
+        const audit = latestAudit(state, scope)
+        if (audit === undefined || audit.verdict !== 'pass' || audit.rev <= gate.rev) return 'auditing'
+        const met = new Set(audit.conditionsMet)
+        if (conditions.some((condition) => !met.has(condition))) return 'auditing'
+      }
+    }
+    if (state.edict.riskLevel === 'high' || state.edict.riskLevel === 'irreversible') {
+      const audit = latestAudit(state, 'result')
+      if (audit === undefined || audit.verdict !== 'pass' || audit.rev <= result.rev) return 'auditing'
+    }
+    return 'ready_to_close'
+  }
+  return 'executing'
+}
+
+/**
  * Distinct appointed teammate names.
  * @param {object} state Board state.
  * @returns {string[]} Unique member names in appointment order.
@@ -491,6 +587,7 @@ export function summarizeBoard(state, tasks = []) {
   const resultGate = latestGate(state, 'result')
   return {
     active: state.active,
+    phase: casePhase(state),
     revision: state.revision,
     updatedAt: state.updatedAt,
     abandoned: state.abandoned,
@@ -505,12 +602,19 @@ export function summarizeBoard(state, tasks = []) {
       tier: state.edict.tier,
       rosterCap: state.edict.rosterCap,
       departments: state.edict.departments,
+      riskLevel: state.edict.riskLevel,
+      assumptions: state.edict.assumptions,
+      risks: state.edict.risks,
+      tools: state.edict.tools,
+      dataScope: state.edict.dataScope,
+      budget: state.edict.budget,
     },
     planGate: compactGate(planGate),
     resultGate: compactGate(resultGate),
     appointments: state.appointments.map((appointment) => ({
       member: appointment.member,
       department: appointment.department,
+      role: appointment.role,
       writeScopes: appointment.writeScopes,
     })),
     evidenceCount: state.evidence.length,
@@ -530,6 +634,14 @@ export function summarizeBoard(state, tasks = []) {
       rev: approval.rev,
     })),
     userApproval: (state.approvals ?? []).length === 0 ? null : (state.approvals ?? [])[state.approvals.length - 1],
+    audits: (state.audits ?? []).map((audit) => ({
+      scope: audit.scope,
+      verdict: audit.verdict,
+      auditor: audit.auditor,
+      checks: audit.checks,
+      conditionsMet: audit.conditionsMet,
+      defects: audit.defects,
+    })),
     alerts: boardAlerts(state, tasks),
     closure: state.closure === null ? null : {
       conclusions: state.closure.conclusions,
@@ -560,11 +672,11 @@ export function boardAlerts(state, tasks = [], now = Date.now()) {
   const result = latestGate(state, 'result')
   if (state.edict !== null && plan === undefined) alerts.push('计划门未审：需要门下省 sansheng_gate {kind:"plan"}。')
   if (plan !== undefined && plan.verdict === 'reject') alerts.push('计划被门封驳：按 defects 整改并重新拟旨。')
-  if (state.edict !== null && state.edict.tier === 'large' && plan?.verdict === 'pass' && state.closure === null) {
+  if (state.edict !== null && needsHumanApproval(state.edict) && plan?.verdict === 'pass' && state.closure === null) {
     const approvals = Array.isArray(state.approvals) ? state.approvals : []
     const approval = approvals[approvals.length - 1]
     if (approval === undefined || approval.rev <= plan.rev) {
-      alerts.push('large 任务等待御批：请用户运行 /sansheng approve（或 reject）。')
+      alerts.push('large 或高风险任务等待御批：请用户运行 /sansheng approve（或 reject）。')
     } else if (approval.decision === 'reject') {
       alerts.push('用户已封驳计划：修改制敕后重新过计划门，再请御批。')
     }
@@ -590,6 +702,30 @@ export function boardAlerts(state, tasks = [], now = Date.now()) {
   if (result !== undefined && result.verdict === 'pass' && result.reviews.length < completed.length) {
     alerts.push('成果门通过但逐任务 review 不完整。')
   }
+  const planRejects = state.gates.filter((gate) => gate.kind === 'plan' && gate.verdict === 'reject').length
+  const resultRejects = state.gates.filter((gate) => gate.kind === 'result' && gate.verdict === 'reject').length
+  if (planRejects >= MAX_GATE_REJECTS) {
+    alerts.push(`计划封驳已达 ${planRejects} 轮：停止循环，上奏用户裁决或显式放弃，不得继续重复评审。`)
+  }
+  if (resultRejects >= MAX_GATE_REJECTS) {
+    alerts.push(`成果封驳已达 ${resultRejects} 轮：停止循环，上奏用户裁决或显式放弃，不得继续重复评审。`)
+  }
+  for (const scope of GATE_KINDS) {
+    const gate = latestGate(state, scope)
+    const conditions = Array.isArray(gate?.conditions) ? gate.conditions : []
+    if (conditions.length === 0) continue
+    const audit = latestAudit(state, scope)
+    if (audit === undefined || audit.verdict !== 'pass' || audit.rev <= gate.rev) {
+      alerts.push(`${scope === 'plan' ? '计划' : '成果'}门为有条件通过：需要独立审计确认 ${conditions.length} 项条件。`)
+    }
+  }
+  if (state.edict !== null && (state.edict.riskLevel === 'high' || state.edict.riskLevel === 'irreversible')) {
+    const resultGate = latestGate(state, 'result')
+    const audit = latestAudit(state, 'result')
+    if (audit === undefined || audit.verdict !== 'pass' || (resultGate !== undefined && audit.rev <= resultGate.rev)) {
+      alerts.push('高风险案件：结案前需要独立的成果审计（sansheng_audit scope="result"）。')
+    }
+  }
   if (state.updatedAt !== null) {
     const idleMinutes = Math.round((now - state.updatedAt) / 60000)
     if (idleMinutes >= 120) {
@@ -614,6 +750,7 @@ function compactGate(gate) {
     reviewer: gate.reviewer,
     defects: gate.defects,
     checked: gate.checked,
+    conditions: gate.conditions,
     reviews: gate.reviews,
     summary: gate.summary,
     rev: gate.rev,
@@ -753,6 +890,19 @@ export function validateEdictInput(state, input) {
     fail('ROSTER_CAP_ABOVE_TIER', `${tier} tier allows at most ${maxRoster} teammates; got roster_cap ${rosterCap}`)
   }
   const departments = stringList(input?.departments, 'departments', 0, 9)
+  const assumptions = stringList(input?.assumptions, 'assumptions', 0, 20)
+  const risks = stringList(input?.risks, 'risks', 0, 20)
+  const tools = stringList(input?.tools, 'tools', 0, 32)
+  const dataScope = stringList(input?.data_scope, 'data_scope', 0, 20)
+  const riskLevel = input?.risk_level === undefined ? 'low' : input.risk_level
+  if (!RISK_LEVELS.includes(riskLevel)) {
+    fail('INVALID_RISK_LEVEL', `risk_level must be one of: ${RISK_LEVELS.join(', ')}`)
+  }
+  const budget = optionalString(input?.budget, 'budget', 500)
+  if ((riskLevel === 'high' || riskLevel === 'irreversible')
+    && (assumptions.length === 0 || risks.length === 0 || tools.length === 0 || dataScope.length === 0 || budget === null)) {
+    fail('RISK_ANALYSIS_REQUIRED', 'high/irreversible work needs assumptions, risks, tools, data_scope and budget in the edict')
+  }
   const workstreams = workstreamList(input?.workstreams)
   if (workstreams.length > 0 && tier === 'small') {
     fail('SMALL_TIER_WORKSTREAMS', 'small tier runs without teammates; omit workstreams')
@@ -762,7 +912,7 @@ export function validateEdictInput(state, input) {
       fail('WORKSTREAM_DEPARTMENT_NOT_LISTED', `workstream "${workstream.id}" uses ${workstream.department}, which is not listed in departments`)
     }
   }
-  return { goal, acceptance, boundaries, tier, rosterCap, departments, workstreams }
+  return { goal, acceptance, boundaries, tier, rosterCap, departments, workstreams, assumptions, risks, tools, dataScope, riskLevel, budget }
 }
 
 /**
@@ -780,11 +930,11 @@ export function validateAppointInput(state, input, caller) {
   if (planGate === undefined) {
     fail('PLAN_GATE_NOT_PASSED', 'the 门下省 plan gate must pass after the current edict revision before 尚书省 dispatches the 六部')
   }
-  if (state.edict.tier === 'large') {
+  if (needsHumanApproval(state.edict)) {
     const approvals = Array.isArray(state.approvals) ? state.approvals : []
     const approval = approvals[approvals.length - 1]
     if (approval === undefined || approval.rev <= planGate.rev) {
-      fail('USER_APPROVAL_REQUIRED', 'large tier needs the user to run /sansheng approve after the plan gate passes before any appointment')
+      fail('USER_APPROVAL_REQUIRED', 'large or high-risk work needs the user to run /sansheng approve after the plan gate passes before any appointment')
     }
     if (approval.decision !== 'approve') {
       fail('USER_REJECTED_PLAN', 'the user rejected this plan; revise the edict and pass the plan gate again')
@@ -810,7 +960,8 @@ export function validateAppointInput(state, input, caller) {
     ? null
     : requiredString(input.responsibility, 'responsibility', 500)
   const writeScopes = scopeList(input?.write_scopes, 'write_scopes')
-  return { member, department, responsibility, writeScopes }
+  const role = ministryRole(department)
+  return { member, department, responsibility, writeScopes, role: role?.label ?? null, roleDuty: role?.duty ?? null }
 }
 
 /**
@@ -899,6 +1050,10 @@ export function validateGateInput(state, input, caller, tasks = []) {
     fail('REVIEWER_IS_EXECUTOR', `${caller.name} owns a shared task in this case and cannot review it`)
   }
   const checked = verdict === 'pass' ? stringList(input?.checked, 'checked', 1, 20) : []
+  const conditions = stringList(input?.conditions, 'conditions', 0, 20)
+  if (verdict === 'reject' && conditions.length > 0) {
+    fail('CONDITIONS_ON_REJECT', 'a rejected verdict cannot carry approval conditions')
+  }
   if (verdict === 'pass' && kind === 'plan') {
     const previous = latestGate(state, 'plan')
     if (previous !== undefined && previous.verdict === 'reject'
@@ -927,7 +1082,66 @@ export function validateGateInput(state, input, caller, tasks = []) {
   const summary = input?.summary === undefined || input.summary === null
     ? null
     : requiredString(input.summary, 'summary', 2000)
-  return { kind, verdict, defects, checked, reviews, summary }
+  return { kind, verdict, defects, checked, conditions, reviews, summary }
+}
+
+/**
+ * Validate one independent audit record. An auditor must be a teammate outside
+ * the executing departments (except an appointed 刑部), must not own a shared
+ * task, and must differ from the gate reviewer. A passing audit of a gate with
+ * approval conditions must confirm every condition.
+ * @param {object} state Board state.
+ * @param {object} input Raw tool arguments.
+ * @param {Array<object>} tasks Current Team task views.
+ * @param {{role: string, name: string}} caller Resolved Team membership.
+ * @returns {{scope: 'plan'|'result', verdict: 'pass'|'reject', checks: string[], conditionsMet: string[], defects: string[], summary: string|null}} Normalized audit.
+ */
+export function validateAuditInput(state, input, tasks, caller) {
+  assertExpectedRevision(state, input)
+  assertActive(state)
+  if (caller.role !== 'teammate') {
+    fail('AUDITOR_MUST_BE_TEAMMATE', 'an independent teammate (not the Lead) must perform the audit')
+  }
+  const scope = input?.scope
+  if (!GATE_KINDS.includes(scope)) fail('INVALID_AUDIT_SCOPE', 'scope must be "plan" or "result"')
+  const gate = latestGate(state, scope)
+  if (gate === undefined || gate.verdict !== 'pass') {
+    fail('GATE_NOT_PASSED', `the ${scope} gate must pass before it can be audited`)
+  }
+  if (gate.reviewer === caller.name) {
+    fail('AUDITOR_MUST_BE_INDEPENDENT', `${caller.name} reviewed this gate and cannot also audit it`)
+  }
+  const appointment = state.appointments.find((entry) => entry.member === caller.name)
+  if (appointment !== undefined && appointment.department !== '刑部') {
+    fail('AUDITOR_MUST_BE_INDEPENDENT', `${caller.name} is appointed to ${appointment.department}; only 刑部 may audit from inside the ministries`)
+  }
+  if (tasks.some((task) => task !== null && typeof task === 'object' && task.status !== 'deleted' && task.ownerName === caller.name)) {
+    fail('AUDITOR_IS_EXECUTOR', `${caller.name} owns a shared task and cannot audit it`)
+  }
+  const verdict = input?.verdict
+  if (verdict !== 'pass' && verdict !== 'reject') fail('INVALID_VERDICT', 'verdict must be "pass" or "reject"')
+  const defects = stringList(input?.defects, 'defects', verdict === 'reject' ? 1 : 0, 20)
+  if (verdict === 'pass' && defects.length > 0) {
+    fail('DEFECTS_ON_PASS', 'a passing audit cannot carry blocking defects')
+  }
+  const conditions = Array.isArray(gate.conditions) ? gate.conditions : []
+  const conditionsMet = stringList(input?.conditions_met, 'conditions_met', 0, 20)
+  for (const condition of conditionsMet) {
+    if (!conditions.includes(condition)) {
+      fail('UNKNOWN_AUDIT_CONDITION', `"${condition}" is not an approval condition of the latest ${scope} gate`)
+    }
+  }
+  if (verdict === 'pass') {
+    const missing = conditions.filter((condition) => !conditionsMet.includes(condition))
+    if (missing.length > 0) {
+      fail('GATE_CONDITIONS_UNMET', `a passing audit must confirm every condition: ${missing.join(', ')}`)
+    }
+  }
+  const checks = stringList(input?.checks, 'checks', 1, 20)
+  const summary = input?.summary === undefined || input.summary === null
+    ? null
+    : requiredString(input.summary, 'summary', 2000)
+  return { scope, verdict, checks, conditionsMet, defects, summary }
 }
 
 /**
@@ -1014,6 +1228,25 @@ export function validateCloseInput(state, input, tasks, caller) {
     const coveredStreams = new Set(state.evidence.map((record) => record.workstreamId).filter((id) => typeof id === 'string'))
     const uncovered = workstreams.filter((workstream) => !coveredStreams.has(workstream.id)).map((workstream) => workstream.id)
     if (uncovered.length > 0) fail('WORKSTREAM_WITHOUT_EVIDENCE', `workstreams without evidence: ${uncovered.join(', ')}`)
+  }
+  for (const scope of GATE_KINDS) {
+    const gate = latestGate(state, scope)
+    const conditions = Array.isArray(gate?.conditions) ? gate.conditions : []
+    if (conditions.length === 0) continue
+    const audit = latestAudit(state, scope)
+    if (audit === undefined || audit.verdict !== 'pass' || audit.rev <= gate.rev) {
+      fail('GATE_CONDITIONS_UNMET', `the ${scope} gate has approval conditions that need a newer passing independent audit`)
+    }
+    const met = new Set(audit.conditionsMet)
+    const missing = conditions.filter((condition) => !met.has(condition))
+    if (missing.length > 0) fail('GATE_CONDITIONS_UNMET', `unmet ${scope} conditions: ${missing.join(', ')}`)
+  }
+  if (state.edict.riskLevel === 'high' || state.edict.riskLevel === 'irreversible') {
+    const resultGate = latestGate(state, 'result')
+    const audit = latestAudit(state, 'result')
+    if (audit === undefined || audit.verdict !== 'pass' || (resultGate !== undefined && audit.rev <= resultGate.rev)) {
+      fail('HIGH_RISK_AUDIT_REQUIRED', 'high/irreversible work needs a passing independent result audit after the result gate')
+    }
   }
   const conclusions = stringList(input?.conclusions, 'conclusions', 1, 20)
   const deliverables = stringList(input?.deliverables, 'deliverables', 1, 20)
@@ -1123,6 +1356,12 @@ function normalizeStoredEdict(value) {
     tier: value.tier,
     rosterCap: value.rosterCap,
     departments: value.departments.filter((item) => typeof item === 'string'),
+    assumptions: Array.isArray(value.assumptions) ? value.assumptions.filter((item) => typeof item === 'string') : [],
+    risks: Array.isArray(value.risks) ? value.risks.filter((item) => typeof item === 'string') : [],
+    tools: Array.isArray(value.tools) ? value.tools.filter((item) => typeof item === 'string') : [],
+    dataScope: Array.isArray(value.dataScope) ? value.dataScope.filter((item) => typeof item === 'string') : [],
+    riskLevel: RISK_LEVELS.includes(value.riskLevel) ? value.riskLevel : 'low',
+    budget: typeof value.budget === 'string' ? value.budget : null,
     workstreams: Array.isArray(value.workstreams)
       ? value.workstreams
         .filter((item) => item !== null && typeof item === 'object' && typeof item.id === 'string'
@@ -1152,6 +1391,8 @@ function normalizeStoredAppointment(value) {
     member: value.member,
     department: value.department,
     responsibility: typeof value.responsibility === 'string' ? value.responsibility : null,
+    role: typeof value.role === 'string' ? value.role : (ministryRole(value.department)?.label ?? null),
+    roleDuty: typeof value.roleDuty === 'string' ? value.roleDuty : (ministryRole(value.department)?.duty ?? null),
     writeScopes: Array.isArray(value.writeScopes) ? value.writeScopes.filter((item) => typeof item === 'string') : [],
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
   }
@@ -1174,6 +1415,7 @@ function normalizeStoredGate(value) {
     reviewer: value.reviewer,
     defects: Array.isArray(value.defects) ? value.defects.filter((item) => typeof item === 'string') : [],
     checked: Array.isArray(value.checked) ? value.checked.filter((item) => typeof item === 'string') : [],
+    conditions: Array.isArray(value.conditions) ? value.conditions.filter((item) => typeof item === 'string') : [],
     reviews: Array.isArray(value.reviews)
       ? value.reviews
         .filter((item) => item !== null && typeof item === 'object' && typeof item.taskId === 'string')
@@ -1209,6 +1451,29 @@ function normalizeStoredEvidence(value) {
     submittedBy: value.submittedBy,
     workstreamId: typeof value.workstreamId === 'string' ? value.workstreamId : null,
     sourceSessionId: typeof value.sourceSessionId === 'string' ? value.sourceSessionId : null,
+    rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
+    createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
+  }
+}
+
+/**
+ * @param {unknown} value Raw stored audit.
+ * @returns {object|null} Stored audit or null.
+ */
+function normalizeStoredAudit(value) {
+  if (!value || typeof value !== 'object') return null
+  if (typeof value.id !== 'string' || typeof value.scope !== 'string' || typeof value.auditor !== 'string') return null
+  if (!GATE_KINDS.includes(value.scope)) return null
+  if (value.verdict !== 'pass' && value.verdict !== 'reject') return null
+  return {
+    id: value.id,
+    scope: value.scope,
+    verdict: value.verdict,
+    auditor: value.auditor,
+    checks: Array.isArray(value.checks) ? value.checks.filter((item) => typeof item === 'string') : [],
+    conditionsMet: Array.isArray(value.conditionsMet) ? value.conditionsMet.filter((item) => typeof item === 'string') : [],
+    defects: Array.isArray(value.defects) ? value.defects.filter((item) => typeof item === 'string') : [],
+    summary: typeof value.summary === 'string' ? value.summary : null,
     rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
   }
