@@ -75,6 +75,13 @@ function stateSchema() {
     tier: zod.string(),
     rosterCap: zod.number(),
     departments: zod.array(zod.string()),
+    workstreams: zod.array(zod.object({
+      id: zod.string(),
+      department: zod.string(),
+      deliverable: zod.string(),
+      acceptance: zod.array(zod.string()),
+      writeScopes: zod.array(zod.string()),
+    })),
     rev: zod.number().nullable(),
     createdAt: zod.number().nullable(),
   })
@@ -95,6 +102,7 @@ function stateSchema() {
     checked: zod.array(zod.string()),
     reviews: zod.array(zod.object({
       taskId: zod.string(),
+      workstreamId: zod.string().nullable(),
       verdict: zod.string(),
       defects: zod.array(zod.string()),
     })),
@@ -110,6 +118,7 @@ function stateSchema() {
     digest: zod.string().nullable(),
     excerpt: zod.string().nullable(),
     submittedBy: zod.string(),
+    workstreamId: zod.string().nullable(),
     sourceSessionId: zod.string().nullable(),
     rev: zod.number().nullable(),
     createdAt: zod.number().nullable(),
@@ -469,6 +478,22 @@ export function apply(ctx, config = {}) {
           items: { type: 'string' },
           description: 'Executing ministries this job needs, e.g. 工部, 刑部, 礼部.',
         },
+        workstreams: {
+          type: 'array',
+          description: 'Optional per-department delivery units, each with its own acceptance criteria. Evidence and result reviews must name the workstream.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', description: 'Stable lowercase workstream id, e.g. api.' },
+              department: { type: 'string', enum: ['吏部', '户部', '礼部', '兵部', '刑部', '工部'], description: 'Executing ministry.' },
+              deliverable: { type: 'string', description: 'What will exist when this workstream is done.' },
+              acceptance: { type: 'array', items: { type: 'string' }, description: 'Verifiable checks for this workstream.' },
+              write_scopes: { type: 'array', items: { type: 'string' }, description: 'Advisory workspace-relative write prefixes.' },
+            },
+            required: ['id', 'department', 'deliverable', 'acceptance'],
+          },
+        },
         expected_revision: {
           type: 'integer',
           description: 'Board revision read from sansheng_board.',
@@ -580,6 +605,7 @@ export function apply(ctx, config = {}) {
             additionalProperties: false,
             properties: {
               task_id: { type: 'string', description: 'Completed shared task id, e.g. task-3.' },
+              workstream_id: { type: 'string', description: 'Workstream this task belongs to; required when the edict declares workstreams.' },
               verdict: { type: 'string', enum: ['pass'], description: 'Per-task verdict; a passing result gate may only contain pass.' },
             },
             required: ['task_id', 'verdict'],
@@ -633,6 +659,7 @@ export function apply(ctx, config = {}) {
       additionalProperties: false,
       properties: {
         task_id: { type: 'string', description: 'Completed shared task id this evidence covers, e.g. task-3.' },
+        workstream_id: { type: 'string', description: 'Workstream this evidence covers; required when the edict declares workstreams.' },
         command: { type: 'string', description: 'Exact command (or check description) that produces the evidence.' },
         exit_code: { type: 'integer', description: 'Process exit code of the command.' },
         digest: { type: 'string', description: 'Hexadecimal digest of the captured output (16-128 characters).' },
@@ -657,6 +684,7 @@ export function apply(ctx, config = {}) {
       const evidence = {
         id: `ev-${state.evidence.length + 1}`,
         taskId: normalized.taskId,
+        workstreamId: normalized.workstreamId,
         command: normalized.command,
         exitCode: normalized.exitCode,
         digest: normalized.digest,
@@ -828,6 +856,7 @@ function renderPolicy(section, state, tasks = []) {
     `- closure: ${state.closure === null ? 'open' : `closed by ${state.closure.closedBy}`}`,
     `- abandoned: ${state.abandoned === null ? 'no' : `yes (${state.abandoned.reason})`}`,
     `- user approval: ${approval === null ? 'none' : `${approval.decision} at rev ${approval.rev}`}`,
+    `- workstreams: ${(state.edict?.workstreams ?? []).length === 0 ? 'none' : (state.edict.workstreams ?? []).map((workstream) => `${workstream.id}(${workstream.department})`).join(', ')}`,
     ...(alerts.length === 0 ? [] : ['', 'Board alerts (act on these before continuing):', ...alerts.map((line) => `- ${line}`)]),
   ]
   return lines.join('\n')

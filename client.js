@@ -180,7 +180,7 @@ window.__ModuleLoader__.load({
 					return (entry.kind === "plan" ? "计划门 " : "成果门 ") + (entry.verdict === "pass" ? "通过" : "封驳")
 						+ (entry.checked ? " · 核对 " + entry.checked + " 项" : "");
 				case "evidence":
-					return "取证 " + String(entry.taskId ?? "?") + " · " + String(entry.command ?? "");
+					return "取证 " + String(entry.taskId ?? "?") + (entry.workstreamId ? " · " + entry.workstreamId : "") + " · " + String(entry.command ?? "");
 				case "close":
 					return "结案：" + String((entry.conclusions ?? [])[0] ?? "");
 				case "approval":
@@ -248,6 +248,34 @@ window.__ModuleLoader__.load({
 						h("div", { className: "dss-row" }, h("strong", null, "边界")),
 						h("ul", { className: "dss-list" }, edict.boundaries.map((item, index) => h("li", { key: "b" + index }, item))))
 					: null,
+			);
+		}
+
+		function Workstreams(props) {
+			const { board } = props;
+			const workstreams = board.edict !== null && Array.isArray(board.edict.workstreams) ? board.edict.workstreams : [];
+			if (workstreams.length === 0) return null;
+			const evidence = Array.isArray(board.evidence) ? board.evidence : [];
+			const result = latestGate(board, "result");
+			const reviewed = new Set(result !== null && Array.isArray(result.reviews) ? result.reviews.map((review) => review.workstreamId) : []);
+			return h(
+				"div",
+				{ className: "dss-section" },
+				h("h4", null, "工作流 · 逐部验收"),
+				workstreams.map((workstream) => h(
+					"div",
+					{ className: "dss-task", key: workstream.id },
+					h("div", { className: "dss-row" }, h("strong", null, workstream.id), h("span", { className: "dss-badge dss-badge-info" }, workstream.department)),
+					h("div", { className: "dss-muted" }, workstream.deliverable),
+					(Array.isArray(workstream.acceptance) && workstream.acceptance.length > 0)
+						? h("ul", { className: "dss-list" }, workstream.acceptance.map((item, index) => h("li", { key: "wa" + index }, item)))
+						: null,
+					h("div", { className: "dss-task-meta" },
+						h("span", { className: "dss-badge " + (evidence.some((record) => record.workstreamId === workstream.id) ? "dss-badge-pass" : "dss-badge-reject") },
+							"证据 " + String(evidence.filter((record) => record.workstreamId === workstream.id).length)),
+						h("span", { className: "dss-badge " + (reviewed.has(workstream.id) ? "dss-badge-pass" : "dss-badge-pending") }, reviewed.has(workstream.id) ? "已复审" : "未复审"),
+					),
+				)),
 			);
 		}
 
@@ -331,6 +359,7 @@ window.__ModuleLoader__.load({
 				h("div", { className: "dss-grid" },
 					h("div", null,
 						h("div", { className: "dss-section" }, h("h4", null, "制敕 · 政事堂"), h(EdictCard, { edict: board.edict })),
+						h(Workstreams, { board }),
 						h("div", { className: "dss-section" }, h("h4", null, "编制 · 六部"), h(Appointments, { board })),
 					),
 					h("div", null,
@@ -458,6 +487,7 @@ window.__ModuleLoader__.load({
 					{ className: "dss-evidence", key: record.id },
 					h("div", { className: "dss-row" },
 						h("strong", null, record.taskId ?? "无任务"),
+						record.workstreamId ? h("span", { className: "dss-badge dss-badge-info" }, record.workstreamId) : null,
 						h("span", { className: "dss-badge " + (record.exitCode === 0 ? "dss-badge-pass" : "dss-badge-reject") }, "exit " + String(record.exitCode)),
 						h("span", { className: "dss-muted" }, "由 " + record.submittedBy + " 提交"),
 					),

@@ -204,6 +204,27 @@ dsh plugin --profile web add dsh-experimental-sansheng
     maxMembers: 12
 ```
 
+## 可选：逐任务工作流（workstreams）
+
+制敕可以声明按部门拆分的交付单元：
+
+```json
+"workstreams": [
+  {"id": "api", "department": "工部", "deliverable": "接口实现",
+   "acceptance": ["接口测试通过"], "write_scopes": ["src/api"]}
+]
+```
+
+声明后：证据必须带 `workstream_id`；成果门 pass 必须覆盖每个 workstream 的 review；结案前每个 workstream 都必须有证据。改稿（重新 `sansheng_edict`）会让之前的计划门失效，必须重审。
+
+## 安装前自检
+
+```sh
+npm run doctor -- --host-version 0.2.1-rc.2
+```
+
+检查包完整性、核心/配套版本同步与宿主支持矩阵（见 `compatibility.json`）。
+
 ## 已知限制
 
 - **预设清单随宿主同步**：配套包 `preset-bundle/cordis.patch.yml` 复制了当前宿主 Standard 预设的子插件清单（工具、压缩、委派等）。DSH 升级后如果 Standard 清单变化，需要同步更新该文件并重新发版。

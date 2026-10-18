@@ -4,6 +4,27 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-10-18
+
+### Added
+
+- **Workstream acceptance model**: `sansheng_edict` accepts optional
+  `workstreams: [{id, department, deliverable, acceptance, write_scopes}]`.
+  Evidence names `workstream_id`; a passing result gate must review every
+  workstream, and close rejects a workstream without evidence.
+- **Plan-gate freshness**: re-drafting the edict invalidates the previous plan
+  pass; appointments, result review and close require a plan gate newer than
+  the current edict revision.
+- **Compatibility matrix + doctor**: `compatibility.json`, shipped
+  `scripts/doctor.mjs` (`npm run doctor -- --host-version 0.2.1-rc.2`), and a
+  `prepack` verification hook. `docs/verification.md` records the tested host
+  and real-machine scenarios.
+
+### Changed
+
+- Board overview shows a 工作流 section with per-workstream acceptance,
+  evidence count and review badge.
+
 ## [0.2.2] — 2026-10-18
 
 ### Added

@@ -56,6 +56,10 @@ const AUDIT_CODES = new Set([
   'SMALL_TIER_NEEDS_NO_TEAM', 'STALE_REVISION', 'TASK_NOT_COMPLETED',
   'TASK_NOT_FOUND', 'TASK_REVIEWS_INCOMPLETE', 'TASK_REVIEWS_REQUIRED',
   'USER_APPROVAL_NOT_READY', 'USER_APPROVAL_REQUIRED', 'USER_REJECTED_PLAN',
+  'WORKSTREAM_DEPARTMENT_NOT_LISTED', 'WORKSTREAM_EVIDENCE_REQUIRED',
+  'WORKSTREAM_REVIEW_REQUIRED', 'WORKSTREAM_REVIEWS_INCOMPLETE',
+  'WORKSTREAM_WITHOUT_EVIDENCE', 'UNKNOWN_WORKSTREAM', 'SMALL_TIER_WORKSTREAMS',
+  'DUPLICATE_WORKSTREAM', 'INVALID_WORKSTREAM_ID',
   'TASK_REVIEW_NOT_PASS', 'UNKNOWN_DEPARTMENT', 'UNKNOWN_REVIEW_TASK',
 ])
 
@@ -293,6 +297,7 @@ export function applyRecord(state, record, eventTime = null) {
           at: recordTime(record, eventTime, evidence.createdAt),
           by: evidence.submittedBy,
           taskId: evidence.taskId,
+          workstreamId: evidence.workstreamId,
           command: evidence.command,
           exitCode: evidence.exitCode,
           digest: evidence.digest,
@@ -510,6 +515,12 @@ export function summarizeBoard(state, tasks = []) {
     completedTasks: tasks.filter((task) => task?.status === 'completed').map((task) => task.id),
     missingEvidence: completedTasksWithoutEvidence(state, tasks),
     taskReviews: resultGate === undefined ? [] : resultGate.reviews,
+    workstreams: (Array.isArray(state.edict?.workstreams) ? state.edict.workstreams : []).map((workstream) => ({
+      ...workstream,
+      evidenceCount: state.evidence.filter((record) => record.workstreamId === workstream.id).length,
+      reviewed: resultGate !== undefined && resultGate.verdict === 'pass'
+        && resultGate.reviews.some((review) => review.workstreamId === workstream.id),
+    })),
     approvals: (state.approvals ?? []).map((approval) => ({
       decision: approval.decision,
       reason: approval.reason,
@@ -568,6 +579,12 @@ export function boardAlerts(state, tasks = [], now = Date.now()) {
     && task.status !== 'completed' && task.status !== 'deleted')
   if (open.length > 0) alerts.push(`未完成任务：${open.map((task) => task.id).join(', ')}。`)
   if (result !== undefined && result.verdict === 'reject') alerts.push('成果被门封驳：补充新证据后再审。')
+  const workstreams = Array.isArray(state.edict?.workstreams) ? state.edict.workstreams : []
+  if (workstreams.length > 0) {
+    const coveredStreams = new Set(state.evidence.map((record) => record.workstreamId).filter((id) => typeof id === 'string'))
+    const uncovered = workstreams.filter((workstream) => !coveredStreams.has(workstream.id)).map((workstream) => workstream.id)
+    if (uncovered.length > 0 && completed.length > 0) alerts.push(`工作流缺证据：${uncovered.join(', ')}。`)
+  }
   if (result !== undefined && result.verdict === 'pass' && result.reviews.length < completed.length) {
     alerts.push('成果门通过但逐任务 review 不完整。')
   }
@@ -657,6 +674,57 @@ export function validateModeAction(state, input) {
 }
 
 /**
+ * The latest plan gate, only when it is newer than the current edict revision.
+ * Re-drafting the edict after a plan pass invalidates that pass; the plan must
+ * be reviewed again before dispatch, result review or close.
+ * @param {object} state Board state.
+ * @returns {object|undefined} The valid plan gate.
+ */
+export function validPlanGate(state) {
+  const plan = latestGate(state, 'plan')
+  if (plan === undefined || plan.verdict !== 'pass') return undefined
+  const edictRev = state.edict?.rev
+  if (Number.isInteger(edictRev) && Number.isInteger(plan.rev) && plan.rev <= edictRev) return undefined
+  return plan
+}
+
+/**
+ * Normalize the optional per-department workstream list of one edict.
+ * @param {unknown} value Raw `workstreams` value.
+ * @returns {Array<{id: string, department: string, deliverable: string, acceptance: string[], writeScopes: string[]}>} Workstreams.
+ */
+function workstreamList(value) {
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value)) fail('INVALID_FIELD', 'workstreams must be an array')
+  if (value.length > 16) fail('INVALID_FIELD', 'workstreams must contain at most 16 items')
+  const seen = new Set()
+  return value.map((item, index) => {
+    if (item === null || typeof item !== 'object') fail('INVALID_FIELD', `workstreams[${index}] must be an object`)
+    const id = requiredString(item.id, `workstreams[${index}].id`, 40)
+    if (!/^[a-z][a-z0-9-]{0,31}$/.test(id)) {
+      fail('INVALID_WORKSTREAM_ID', `workstreams[${index}].id must be lowercase letters, digits and hyphens`)
+    }
+    if (seen.has(id)) fail('DUPLICATE_WORKSTREAM', `${id} appears more than once in workstreams`)
+    seen.add(id)
+    const department = requiredString(item.department, `workstreams[${index}].department`, 40)
+    if (!DEPARTMENT_NAMES.includes(department)) fail('UNKNOWN_DEPARTMENT', `workstreams[${index}].department must be one of: ${DEPARTMENT_NAMES.join(', ')}`)
+    const deliverable = requiredString(item.deliverable, `workstreams[${index}].deliverable`, 500)
+    const acceptance = stringList(item.acceptance, `workstreams[${index}].acceptance`, 1, 10)
+    const writeScopes = scopeList(item.write_scopes, `workstreams[${index}].write_scopes`)
+    return { id, department, deliverable, acceptance, writeScopes }
+  })
+}
+
+/**
+ * @param {object} state Board state.
+ * @returns {string[]} Workstream ids of the current edict.
+ */
+function currentWorkstreamIds(state) {
+  const workstreams = state.edict?.workstreams
+  return Array.isArray(workstreams) ? workstreams.map((workstream) => workstream.id) : []
+}
+
+/**
  * Validate and normalize an edict (制敕) draft.
  * @param {object} state Board state.
  * @param {object} input Raw tool arguments.
@@ -683,7 +751,16 @@ export function validateEdictInput(state, input) {
     fail('ROSTER_CAP_ABOVE_TIER', `${tier} tier allows at most ${maxRoster} teammates; got roster_cap ${rosterCap}`)
   }
   const departments = stringList(input?.departments, 'departments', 0, 9)
-  return { goal, acceptance, boundaries, tier, rosterCap, departments }
+  const workstreams = workstreamList(input?.workstreams)
+  if (workstreams.length > 0 && tier === 'small') {
+    fail('SMALL_TIER_WORKSTREAMS', 'small tier runs without teammates; omit workstreams')
+  }
+  for (const workstream of workstreams) {
+    if (!departments.includes(workstream.department)) {
+      fail('WORKSTREAM_DEPARTMENT_NOT_LISTED', `workstream "${workstream.id}" uses ${workstream.department}, which is not listed in departments`)
+    }
+  }
+  return { goal, acceptance, boundaries, tier, rosterCap, departments, workstreams }
 }
 
 /**
@@ -697,9 +774,9 @@ export function validateAppointInput(state, input, caller) {
   assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (政事堂) may appoint 六部')
-  const planGate = latestGate(state, 'plan')
-  if (planGate?.verdict !== 'pass') {
-    fail('PLAN_GATE_NOT_PASSED', 'the 门下省 plan gate must pass before 尚书省 dispatches the 六部')
+  const planGate = validPlanGate(state)
+  if (planGate === undefined) {
+    fail('PLAN_GATE_NOT_PASSED', 'the 门下省 plan gate must pass after the current edict revision before 尚书省 dispatches the 六部')
   }
   if (state.edict.tier === 'large') {
     const approvals = Array.isArray(state.approvals) ? state.approvals : []
@@ -741,7 +818,7 @@ export function validateAppointInput(state, input, caller) {
  * @param {Array<object>} tasks Current Team task views.
  * @returns {Array<{taskId: string, verdict: 'pass', defects: string[]}>} Reviews.
  */
-function reviewList(value, tasks) {
+function reviewList(value, tasks, workstreams = []) {
   const completed = tasks
     .filter((task) => task?.status === 'completed' && typeof task.id === 'string')
     .map((task) => task.id)
@@ -766,10 +843,25 @@ function reviewList(value, tasks) {
     if (item.verdict !== 'pass') {
       fail('TASK_REVIEW_NOT_PASS', `reviews[${index}] for ${taskId} is ${String(item.verdict)}; a passing result gate may only contain passing task reviews`)
     }
-    reviews.push({ taskId, verdict: 'pass', defects: [] })
+    const known = workstreams.map((workstream) => workstream.id)
+    let workstreamId = null
+    if (item.workstream_id !== undefined && item.workstream_id !== null && item.workstream_id !== '') {
+      workstreamId = requiredString(item.workstream_id, `reviews[${index}].workstream_id`, 40)
+      if (!known.includes(workstreamId)) {
+        fail('UNKNOWN_WORKSTREAM', `reviews[${index}] names unknown workstream ${workstreamId}`)
+      }
+    } else if (workstreams.length > 0) {
+      fail('WORKSTREAM_REVIEW_REQUIRED', `reviews[${index}] for ${taskId} must name its workstream_id`)
+    }
+    reviews.push({ taskId, workstreamId, verdict: 'pass', defects: [] })
   }
   const missing = completed.filter((taskId) => !seen.has(taskId))
   if (missing.length > 0) fail('TASK_REVIEWS_INCOMPLETE', `missing per-task reviews: ${missing.join(', ')}`)
+  if (workstreams.length > 0) {
+    const reviewed = new Set(reviews.map((review) => review.workstreamId))
+    const uncovered = workstreams.filter((workstream) => !reviewed.has(workstream.id)).map((workstream) => workstream.id)
+    if (uncovered.length > 0) fail('WORKSTREAM_REVIEWS_INCOMPLETE', `workstreams without a review: ${uncovered.join(', ')}`)
+  }
   return reviews
 }
 
@@ -791,8 +883,8 @@ export function validateGateInput(state, input, caller, tasks = []) {
   if (!GATE_KINDS.includes(kind)) fail('INVALID_GATE_KIND', 'kind must be "plan" or "result"')
   const verdict = input?.verdict
   if (verdict !== 'pass' && verdict !== 'reject') fail('INVALID_VERDICT', 'verdict must be "pass" or "reject"')
-  if (kind === 'result' && latestGate(state, 'plan')?.verdict !== 'pass') {
-    fail('PLAN_GATE_NOT_PASSED', 'the plan gate must pass before the result gate can be reviewed')
+  if (kind === 'result' && validPlanGate(state) === undefined) {
+    fail('PLAN_GATE_NOT_PASSED', 'the plan gate must pass after the current edict revision before the result gate can be reviewed')
   }
   const defects = stringList(input?.defects, 'defects', verdict === 'reject' ? 1 : 0, 20)
   if (verdict === 'pass' && defects.length > 0) {
@@ -828,7 +920,7 @@ export function validateGateInput(state, input, caller, tasks = []) {
         fail('RESULT_NOT_REVISED', 'the delivery was 封驳; submit new evidence after the rejection before a new result review')
       }
     }
-    reviews = reviewList(input?.reviews, tasks)
+    reviews = reviewList(input?.reviews, tasks, Array.isArray(state.edict?.workstreams) ? state.edict.workstreams : [])
   }
   const summary = input?.summary === undefined || input.summary === null
     ? null
@@ -863,11 +955,21 @@ export function validateEvidenceInput(state, input, tasks = []) {
   const digest = requiredString(input?.digest, 'digest', 200)
   if (!/^[a-fA-F0-9]{16,128}$/.test(digest)) fail('INVALID_DIGEST', 'digest must be a hexadecimal output digest (16-128 characters)')
   const excerpt = requiredString(input?.excerpt, 'excerpt', 8000)
+  const workstreams = Array.isArray(state.edict?.workstreams) ? state.edict.workstreams : []
+  let workstreamId = null
+  if (input?.workstream_id !== undefined && input.workstream_id !== null && input.workstream_id !== '') {
+    workstreamId = requiredString(input.workstream_id, 'workstream_id', 40)
+    if (!workstreams.some((workstream) => workstream.id === workstreamId)) {
+      fail('UNKNOWN_WORKSTREAM', `${workstreamId} is not a workstream of the current edict`)
+    }
+  } else if (workstreams.length > 0) {
+    fail('WORKSTREAM_EVIDENCE_REQUIRED', 'this edict declares workstreams; evidence must name its workstream_id')
+  }
   if (state.evidence.some((record) => record.taskId === taskId && record.command === command && record.digest === digest)) {
     fail('DUPLICATE_EVIDENCE', `evidence for ${taskId} with this command and digest is already recorded`)
   }
   const sourceSessionId = optionalString(input?.source_session_id, 'source_session_id', 200)
-  return { taskId, command, exitCode, digest, excerpt, sourceSessionId }
+  return { taskId, command, exitCode, digest, excerpt, workstreamId, sourceSessionId }
 }
 
 /**
@@ -882,8 +984,8 @@ export function validateCloseInput(state, input, tasks, caller) {
   assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (政事堂) may close the case')
-  if (latestGate(state, 'plan')?.verdict !== 'pass') {
-    fail('PLAN_GATE_NOT_PASSED', 'cannot close before the 门下省 plan gate passes')
+  if (validPlanGate(state) === undefined) {
+    fail('PLAN_GATE_NOT_PASSED', 'cannot close before the 门下省 plan gate passes after the current edict revision')
   }
   if (latestGate(state, 'result')?.verdict !== 'pass') {
     fail('RESULT_GATE_NOT_PASSED', 'cannot close before the 门下省 result gate passes')
@@ -904,6 +1006,12 @@ export function validateCloseInput(state, input, tasks, caller) {
   const missing = completedTasksWithoutEvidence(state, tasks)
   if (missing.length > 0) {
     fail('COMPLETED_TASK_WITHOUT_EVIDENCE', `completed tasks without evidence: ${missing.join(', ')}`)
+  }
+  const workstreams = Array.isArray(state.edict?.workstreams) ? state.edict.workstreams : []
+  if (workstreams.length > 0) {
+    const coveredStreams = new Set(state.evidence.map((record) => record.workstreamId).filter((id) => typeof id === 'string'))
+    const uncovered = workstreams.filter((workstream) => !coveredStreams.has(workstream.id)).map((workstream) => workstream.id)
+    if (uncovered.length > 0) fail('WORKSTREAM_WITHOUT_EVIDENCE', `workstreams without evidence: ${uncovered.join(', ')}`)
   }
   const conclusions = stringList(input?.conclusions, 'conclusions', 1, 20)
   const deliverables = stringList(input?.deliverables, 'deliverables', 1, 20)
@@ -1013,6 +1121,18 @@ function normalizeStoredEdict(value) {
     tier: value.tier,
     rosterCap: value.rosterCap,
     departments: value.departments.filter((item) => typeof item === 'string'),
+    workstreams: Array.isArray(value.workstreams)
+      ? value.workstreams
+        .filter((item) => item !== null && typeof item === 'object' && typeof item.id === 'string'
+          && typeof item.department === 'string' && typeof item.deliverable === 'string')
+        .map((item) => ({
+          id: item.id,
+          department: item.department,
+          deliverable: item.deliverable,
+          acceptance: Array.isArray(item.acceptance) ? item.acceptance.filter((entry) => typeof entry === 'string') : [],
+          writeScopes: Array.isArray(item.writeScopes) ? item.writeScopes.filter((entry) => typeof entry === 'string') : [],
+        }))
+      : [],
     rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
   }
@@ -1057,6 +1177,7 @@ function normalizeStoredGate(value) {
         .filter((item) => item !== null && typeof item === 'object' && typeof item.taskId === 'string')
         .map((item) => ({
           taskId: item.taskId,
+          workstreamId: typeof item.workstreamId === 'string' ? item.workstreamId : null,
           verdict: item.verdict === 'pass' ? 'pass' : 'reject',
           defects: Array.isArray(item.defects) ? item.defects.filter((entry) => typeof entry === 'string') : [],
         }))
@@ -1084,6 +1205,7 @@ function normalizeStoredEvidence(value) {
     digest: typeof value.digest === 'string' ? value.digest : null,
     excerpt: typeof value.excerpt === 'string' ? value.excerpt : null,
     submittedBy: value.submittedBy,
+    workstreamId: typeof value.workstreamId === 'string' ? value.workstreamId : null,
     sourceSessionId: typeof value.sourceSessionId === 'string' ? value.sourceSessionId : null,
     rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,

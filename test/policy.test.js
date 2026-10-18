@@ -142,6 +142,7 @@ function evidence(state, options = {}) {
       digest: options.digest ?? 'a'.repeat(64),
       excerpt: options.excerpt ?? 'ok',
       submittedBy: 'xingbu',
+      workstreamId: options.workstreamId ?? null,
       sourceSessionId: null,
       rev: state.revision + 1,
       createdAt: null,
@@ -615,6 +616,101 @@ test('evidence must reference a completed shared task and cannot repeat itself',
   assertCode(() => validateEvidenceInput(withEvidence, { ...args, expected_revision: withEvidence.revision }, TASKS), 'DUPLICATE_EVIDENCE')
 })
 
+/* Workstreams */
+
+function wsEdict(overrides = {}) {
+  return baseEdict({
+    departments: ['工部', '刑部'],
+    workstreams: [{
+      id: 'impl',
+      department: '工部',
+      deliverable: 'working change',
+      acceptance: ['tests pass'],
+      writeScopes: ['src'],
+    }],
+    ...overrides,
+  })
+}
+
+test('edict workstreams are normalized and validated', () => {
+  const state = createEmptyState()
+  const edict = validateEdictInput(state, {
+    goal: 'g', acceptance: ['a'], tier: 'medium', roster_cap: 3,
+    departments: ['工部'],
+    workstreams: [{ id: 'impl', department: '工部', deliverable: 'code', acceptance: ['tests pass'] }],
+    expected_revision: 0,
+  })
+  assert.equal(edict.workstreams[0].id, 'impl')
+  assert.deepEqual(edict.workstreams[0].acceptance, ['tests pass'])
+  assertCode(() => validateEdictInput(state, {
+    goal: 'g', acceptance: ['a'], tier: 'medium', departments: ['工部'],
+    workstreams: [{ id: 'impl', department: '工部', deliverable: 'x', acceptance: ['a'] }, { id: 'impl', department: '工部', deliverable: 'y', acceptance: ['b'] }],
+    expected_revision: 0,
+  }), 'DUPLICATE_WORKSTREAM')
+  assertCode(() => validateEdictInput(state, {
+    goal: 'g', acceptance: ['a'], tier: 'medium', departments: ['工部'],
+    workstreams: [{ id: 'Bad ID', department: '工部', deliverable: 'x', acceptance: ['a'] }],
+    expected_revision: 0,
+  }), 'INVALID_WORKSTREAM_ID')
+  assertCode(() => validateEdictInput(state, {
+    goal: 'g', acceptance: ['a'], tier: 'medium', departments: ['工部'],
+    workstreams: [{ id: 'docs', department: '礼部', deliverable: 'x', acceptance: ['a'] }],
+    expected_revision: 0,
+  }), 'WORKSTREAM_DEPARTMENT_NOT_LISTED')
+  assertCode(() => validateEdictInput(state, {
+    goal: 'g', acceptance: ['a'], tier: 'small', roster_cap: 0, departments: [],
+    workstreams: [{ id: 'impl', department: '工部', deliverable: 'x', acceptance: ['a'] }],
+    expected_revision: 0,
+  }), 'SMALL_TIER_WORKSTREAMS')
+})
+
+test('evidence and result reviews must name a workstream when the edict declares them', () => {
+  let state = appointment(planPass(activeState(wsEdict())))
+  const revision = state.revision
+  const base = { task_id: 'task-1', command: 'npm test', exit_code: 0, digest: 'a'.repeat(64), excerpt: 'ok', expected_revision: revision }
+  assertCode(() => validateEvidenceInput(state, base, TASKS), 'WORKSTREAM_EVIDENCE_REQUIRED')
+  assertCode(() => validateEvidenceInput(state, { ...base, workstream_id: 'nope' }, TASKS), 'UNKNOWN_WORKSTREAM')
+  const valid = validateEvidenceInput(state, { ...base, workstream_id: 'impl' }, TASKS)
+  assert.equal(valid.workstreamId, 'impl')
+
+  state = evidence(state, { workstreamId: 'impl' })
+  const reviewed = validateGateInput(state, {
+    kind: 'result', verdict: 'pass', checked: ['evidence checked'],
+    reviews: [{ task_id: 'task-1', workstream_id: 'impl', verdict: 'pass' }],
+    expected_revision: state.revision,
+  }, SECOND_REVIEWER, TASKS)
+  assert.equal(reviewed.reviews[0].workstreamId, 'impl')
+  assertCode(() => validateGateInput(state, {
+    kind: 'result', verdict: 'pass', checked: ['x'],
+    reviews: [{ task_id: 'task-1', verdict: 'pass' }],
+    expected_revision: state.revision,
+  }, SECOND_REVIEWER, TASKS), 'WORKSTREAM_REVIEW_REQUIRED')
+})
+
+test('closing rejects workstreams without evidence', () => {
+  let state = appointment(planPass(activeState(wsEdict())))
+  state = evidence(state, { workstreamId: 'impl' })
+  state = resultPass(state, {
+    reviews: [{ taskId: 'task-1', workstreamId: 'impl', verdict: 'pass', defects: [] }],
+  })
+  const report = validateCloseInput(state, { conclusions: ['done'], deliverables: ['src'], expected_revision: state.revision }, TASKS, LEAD)
+  assert.deepEqual(report.conclusions, ['done'])
+  const stripped = { ...state, evidence: state.evidence.map((record) => ({ ...record, workstreamId: null })) }
+  assertCode(() => validateCloseInput(stripped, { conclusions: ['done'], deliverables: ['src'], expected_revision: stripped.revision }, TASKS, LEAD), 'WORKSTREAM_WITHOUT_EVIDENCE')
+})
+
+test('re-drafting the edict invalidates the plan gate', () => {
+  let state = planPass(activeState(wsEdict()))
+  state = append(state, 'edict', { edict: wsEdict({ revision: 2, rev: state.revision + 1, goal: 'revised' }) })
+  assertCode(
+    () => validateAppointInput(state, { member: 'gongbu', department: '工部', expected_revision: state.revision }, LEAD),
+    'PLAN_GATE_NOT_PASSED',
+  )
+  state = planPass(state)
+  const appointmentResult = validateAppointInput(state, { member: 'gongbu', department: '工部', expected_revision: state.revision }, LEAD)
+  assert.equal(appointmentResult.member, 'gongbu')
+})
+
 /* Closing */
 
 const REPORT = { conclusions: ['done'], deliverables: ['src/a.js'] }
@@ -671,7 +767,7 @@ test('summarizeBoard exposes revision, rounds and missing evidence', () => {
   assert.equal(summary.planRounds, 1)
   assert.equal(summary.resultRounds, 1)
   assert.deepEqual(summary.completedTasks, ['task-1'])
-  assert.deepEqual(summary.taskReviews, [{ taskId: 'task-1', verdict: 'pass', defects: [] }])
+  assert.deepEqual(summary.taskReviews, [{ taskId: 'task-1', workstreamId: null, verdict: 'pass', defects: [] }])
   assert.equal(summary.closure, null)
 })
 

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "package": "dsh-experimental-sansheng",
+  "version": "0.3.0",
+  "node": ">=22.19.0 || >=24",
+  "testedHosts": [
+    {
+      "version": "0.2.1-rc.2",
+      "track": "recommended",
+      "testedAt": "2026-10-18",
+      "evidence": [
+        "docs/verification.md"
+      ]
+    }
+  ],
+  "notes": "Host versions outside testedHosts are unsupported: the plugin relies on Agent Teams, session projections, and command/run events. Run `npm run doctor -- --host-version <dsh version>` before installing."
+}

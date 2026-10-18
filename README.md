@@ -163,6 +163,27 @@ The plugin depends on DSH Agent Teams (`@deepseek-ai/dsh-experimental-agent-team
     maxMembers: 12
 ```
 
+## Optional workstreams
+
+An edict may declare per-department delivery units:
+
+```json
+"workstreams": [
+  {"id": "api", "department": "工部", "deliverable": "endpoint",
+   "acceptance": ["endpoint tests pass"], "write_scopes": ["src/api"]}
+]
+```
+
+With workstreams declared, evidence must name `workstream_id`, a passing result gate must review every workstream, and close rejects a workstream without evidence. Re-drafting the edict invalidates the previous plan pass.
+
+## Pre-install doctor
+
+```sh
+npm run doctor -- --host-version 0.2.1-rc.2
+```
+
+Checks package integrity, core/companion version sync and the host support matrix (`compatibility.json`).
+
 ## Known limitations
 
 - **The preset catalog mirrors the host's Standard preset**: `preset-bundle/cordis.patch.yml` copies the current Standard child-plugin list. Re-sync it and release when a DSH upgrade changes Standard.

@@ -19,5 +19,6 @@ jobs:
           cache: npm
       - run: npm install --no-audit --no-fund
       - run: npm run verify
+      - run: npm run doctor -- --host-version 0.2.1-rc.2
       - run: npm pack --dry-run
       - run: node --check preset-bundle/index.js && cd preset-bundle && npm pack --dry-run
