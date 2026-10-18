@@ -448,7 +448,7 @@ export function apply(ctx, config = {}) {
 
   registerTool({
     name: 'sansheng_edict',
-    description: 'Draft or revise the 制敕 (edict): goal, acceptance criteria, boundaries, task tier, roster cap, and the 六部 departments this job needs. Lead-only. Requires the mode to be active. The skill requires the edict before any appointment.',
+    description: 'Draft or revise the 制敕 (edict): goal, acceptance criteria, boundaries, task tier, roster cap, and the 六部 departments this job needs. Lead-only. Requires the mode to be active. The mode requires the edict before any appointment.',
     parameters: {
       type: 'object',
       additionalProperties: false,

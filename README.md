@@ -26,7 +26,7 @@ This plugin turns them into a state machine with **hard gates enforced by tools*
 
 ## Relationship to the skill
 
-The `three-departments-six-ministries` skill is the **procedure document**. This plugin is the **execution and audit layer**:
+The `three-departments-six-ministries` skill is an optional **procedure document**; the plugin carries its own authoritative tool contract. The plugin is the **execution and audit layer**:
 
 | | Skill | This plugin |
 |---|---|---|
@@ -99,7 +99,7 @@ Hard invariants since 0.2.0: stale revisions are rejected; a rejected plan must 
 
 Since 0.2.2: large-tier appointments need a real user `/sansheng approve` recorded after the plan gate (a model claim is not enough); `/sansheng reject` blocks dispatch until the plan is revised and re-reviewed. Board alerts escalate a stalled board at 30 / 60 / 120 minutes (inspect → interrupt/reassign or report → user decides).
 
-Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
+Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The board's 成员 tab and each task card's 负责人轨迹 button open the member's native DSH session, where the original Chat / Trajectory view is available; the board never copies trajectories. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
 
 ## Tools
 

@@ -16,7 +16,7 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 
 		/** Browser services required by the header action. */
-		const inject = ["slots"];
+		const inject = ["sessions", "uiWorkspace", "slots"];
 
 		const TAG = "dsh-experimental-sansheng";
 
@@ -80,6 +80,12 @@ window.__ModuleLoader__.load({
 			".dss-event-info:before{background:var(--dsw-alias-state-business-primary,#4c8dff)}",
 			".dss-event-time{color:var(--dsw-alias-label-caption);font-size:10px;margin-right:6px;font-variant-numeric:tabular-nums}",
 			".dss-event-text{font-size:12px;word-break:break-word}",
+			".dss-link{background:0 0;border:.5px solid var(--dsw-alias-border-l2,#3a3b40);border-radius:6px;color:var(--dsw-alias-state-business-primary,#4c8dff);cursor:pointer;font-size:11px;padding:2px 7px;white-space:nowrap}",
+			".dss-link:hover{background:var(--dsw-alias-bg-layer-2,#2a2b30)}",
+			".dss-link:disabled{color:var(--dsw-alias-label-caption);cursor:default;border-color:var(--dsw-alias-border-l1,#2f3033)}",
+			".dss-error{margin:0 0 8px;padding:7px 9px;border-radius:7px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f85149) 14%,transparent);color:var(--dsw-alias-state-error-primary,#f85149);font-size:11px}",
+			".dss-member{display:flex;align-items:center;gap:8px;border:.5px solid var(--dsw-alias-border-l2,#3a3b40);background:var(--dsw-alias-bg-layer-2,#242529);border-radius:8px;padding:8px 10px;margin-bottom:7px}",
+			".dss-member-main{display:flex;flex-direction:column;min-width:0;flex:1;gap:1px}",
 			".dss-kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 10px;margin-top:4px}",
 			".dss-kv dt{color:var(--dsw-alias-label-tertiary);font-size:11px}",
 			".dss-kv dd{margin:0;word-break:break-word}",
@@ -392,7 +398,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function TaskCard(props) {
-			const { task, board, resultGate } = props;
+			const { task, board, resultGate, onOpenOwner } = props;
 			const covered = coveredIds(board);
 			const reviewed = reviewedIds(resultGate);
 			return h(
@@ -407,6 +413,9 @@ window.__ModuleLoader__.load({
 					task.status === "completed" && resultGate !== null && resultGate.verdict === "pass"
 						? h("span", { className: "dss-badge " + (reviewed.has(task.id) ? "dss-badge-pass" : "dss-badge-reject") }, reviewed.has(task.id) ? "已复审" : "未复审")
 						: null,
+					onOpenOwner !== undefined && task.ownerName
+						? h("button", { className: "dss-link", title: "打开负责人会话 / 轨迹", onClick: () => onOpenOwner(task.ownerName) }, "负责人轨迹")
+						: null,
 					Array.isArray(task.writeScopes) && task.writeScopes.length > 0
 						? h("span", { className: "dss-muted dss-mono" }, task.writeScopes.join(", "))
 						: null,
@@ -414,9 +423,55 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function TasksTab(props) {
-			const { board, team } = props;
+		function MemberRow(props) {
+			const { member, team, sessionId, useSessions, onOpenMember, onError } = props;
+			const running = useSessions((state) => state?.byId?.[member.id]?.running);
 			const tasks = teamTasks(team);
+			const current = tasks.find((task) => task.ownerName === member.name && (task.status === "in_progress" || task.status === "pending"));
+			const phase = member.phase === "active" ? (running === true ? "运行中" : "空闲") : String(member.phase ?? "未知");
+			return h(
+				"div",
+				{ className: "dss-member" },
+				h("span", { className: "dss-dot " + (running === true ? "dss-dot-open" : "") }),
+				h("div", { className: "dss-member-main" },
+					h("div", { className: "dss-row" },
+						h("strong", null, member.name),
+						h("span", { className: "dss-badge " + (member.role === "lead" ? "dss-badge-info" : "dss-badge-pending") }, member.role === "lead" ? "政事堂 Lead" : "成员"),
+						h("span", { className: "dss-muted" }, phase),
+					),
+					current ? h("span", { className: "dss-muted" }, "当前任务：" + String(current.subject ?? current.id)) : null,
+					member.error ? h("span", { className: "dss-warn" }, member.error) : null,
+				),
+				h("button", {
+					className: "dss-link",
+					title: "在 DSH 原生会话页打开该成员的 Chat / Trajectory",
+					onClick: () => onOpenMember(member.id),
+				}, "打开会话 / 轨迹"),
+			);
+		}
+
+		function MembersTab(props) {
+			const { team, sessionId, useSessions, onOpenMember } = props;
+			const members = team !== undefined && team !== null && Array.isArray(team.members) ? team.members : [];
+			if (members.length === 0) {
+				return h("p", { className: "dss-empty" }, "当前没有可导航的团队会话。团队结束或归档后，成员会话仍在侧栏历史中可查。");
+			}
+			return h(
+				"div",
+				null,
+				h("p", { className: "dss-muted", style: { marginTop: 0 } }, "轨迹不在看板里复制：点击成员在 DSH 原生会话页查看完整 Chat / Trajectory（思考、工具调用、文件改动）。"),
+				members.map((member) => h(MemberRow, { key: member.id, member, team, sessionId, useSessions, onOpenMember })),
+			);
+		}
+
+		function TasksTab(props) {
+			const { board, team, onOpenMember } = props;
+			const tasks = teamTasks(team);
+			const members = team !== undefined && team !== null && Array.isArray(team.members) ? team.members : [];
+			const openOwner = (ownerName) => {
+				const member = members.find((candidate) => candidate.name === ownerName);
+				if (member !== undefined) onOpenMember(member.id);
+			};
 			const resultGate = latestGate(board, "result");
 			const columns = [
 				["pending", "待办"],
@@ -431,7 +486,7 @@ window.__ModuleLoader__.load({
 					"div",
 					{ key: status },
 					h("div", { className: "dss-col-head" }, h("span", null, label), h("span", null, String(tasks.filter((task) => task.status === status).length))),
-					tasks.filter((task) => task.status === status).map((task) => h(TaskCard, { key: task.id, task, board, resultGate })),
+					tasks.filter((task) => task.status === status).map((task) => h(TaskCard, { key: task.id, task, board, resultGate, onOpenOwner: openOwner })),
 					tasks.filter((task) => task.status === status).length === 0 ? h("p", { className: "dss-empty" }, "—") : null,
 				)),
 			);
@@ -517,17 +572,28 @@ window.__ModuleLoader__.load({
 		}
 
 		function SanshengPanel(props) {
-			const { board, team, onClose } = props;
+			const { board, team, onClose, sessionId, useSessions, openTeammate } = props;
 			const [tab, setTab] = react.useState("overview");
+			const [error, setError] = react.useState(null);
 			const tabs = [
 				["overview", "总览"],
+				["members", "成员"],
 				["tasks", "任务"],
 				["gates", "审议"],
 				["evidence", "证据"],
 				["timeline", "时间线"],
 			];
+			const openMember = (memberId) => {
+				try {
+					openTeammate(sessionId, memberId);
+					onClose();
+				} catch (error) {
+					setError(String(error?.message ?? error));
+				}
+			};
 			const render = () => {
-				if (tab === "tasks") return h(TasksTab, { board, team });
+				if (tab === "members") return h(MembersTab, { team, sessionId, useSessions, onOpenMember: openMember });
+				if (tab === "tasks") return h(TasksTab, { board, team, onOpenMember: openMember });
 				if (tab === "gates") return h(GatesTab, { board });
 				if (tab === "evidence") return h(EvidenceTab, { board });
 				if (tab === "timeline") return h(TimelineTab, { board });
@@ -565,13 +631,16 @@ window.__ModuleLoader__.load({
 						label,
 					)),
 				),
-				h("div", { className: "dss-body" }, render()),
-				h("div", { className: "dss-footer" }, "只读投影：状态来自当前会话事件日志；没有共享任务文件。"),
+				h("div", { className: "dss-body" },
+					error !== null ? h("div", { className: "dss-error" }, error) : null,
+					render(),
+				),
+				h("div", { className: "dss-footer" }, "只读投影：状态来自当前会话事件日志；没有共享任务文件。成员轨迹由 DSH 原生会话页呈现。"),
 			);
 		}
 
 		function sanshengAction(props) {
-			const { sessionId, useSession, useSessions } = props;
+			const { sessionId, useSession, useSessions, openTeammate } = props;
 			const [open, setOpen] = react.useState(false);
 			const previousActive = react.useRef(false);
 			const parentId = useSession((snapshot) => snapshot?.subagent?.address?.parentSessionId);
@@ -583,11 +652,12 @@ window.__ModuleLoader__.load({
 				(state) => state?.projectionsBySession?.[leadSessionId]?.values?.agentTeam,
 			);
 
+			const isLeadView = parentId === undefined || parentId === null;
 			react.useEffect(() => {
 				const active = board !== undefined && board !== null && board.active === true;
-				if (active && previousActive.current === false) setOpen(true);
+				if (isLeadView && active && previousActive.current === false) setOpen(true);
 				previousActive.current = active;
-			}, [board === undefined || board === null ? false : board.active]);
+			}, [isLeadView, board === undefined || board === null ? false : board.active]);
 
 			react.useEffect(() => {
 				if (open === false) return undefined;
@@ -625,18 +695,32 @@ window.__ModuleLoader__.load({
 					h("span", null, "三省六部"),
 					h("span", { className: "dss-count" }, String(board.appointments.length)),
 				),
-				open ? h(SanshengPanel, { board, team, onClose: () => setOpen(false) }) : null,
+				open ? h(SanshengPanel, { board, team, onClose: () => setOpen(false), sessionId, useSessions, openTeammate }) : null,
 			);
 		}
 
 		function apply(ctx) {
 			ctx.effect(() => ensureStyle(), "sansheng: board style");
+			const sessions = ctx.sessions;
+			const leadSessionIdOf = (sessionId) => (sessions.binding(sessionId)?.session.getSnapshot().subagent?.address)?.parentSessionId ?? sessionId;
+			const actions = {
+				openTeammate(sessionId, childSessionId) {
+					const parentSessionId = leadSessionIdOf(sessionId);
+					if ((sessions.retainInfo(sessionId).getSnapshot().retainedBy.mainView ?? 0) === 0) return;
+					if (childSessionId === parentSessionId) {
+						ctx.uiWorkspace.openSession(parentSessionId);
+						return;
+					}
+					ctx.uiWorkspace.openSession({ parentSessionId, childSessionId, mode: "continuable" });
+				},
+			};
 			ctx.slots.inject("conversation.session.header.actions", () =>
 				ctx.slots.register(
 					{
 						name: "conversation.session.header.actions",
 						id: "sansheng",
 						order: -10,
+						inject: () => actions,
 					},
 					sanshengAction,
 				),

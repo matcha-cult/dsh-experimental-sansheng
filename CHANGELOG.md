@@ -4,6 +4,17 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-10-18
+
+### Added
+
+- **Member trajectory navigation**: the board gains a 成员 tab and a 负责人轨迹
+  button on task cards. Both open the member's native DSH session
+  (`uiWorkspace.openSession` with the continuable child target), where the full
+  Chat / Trajectory is available. Trajectories are not copied into the board:
+  no duplicated reasoning, no extra log surface, and archived sessions remain
+  reachable from the sidebar.
+
 ## [0.3.0] — 2026-10-18
 
 ### Added

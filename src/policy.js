@@ -65,7 +65,7 @@ const AUDIT_CODES = new Set([
 
 
 /** Deployment-owned default guidance rendered while the mode is active. */
-export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù Bù — "Three Departments and Six Ministries"), for complex multi-deliverable work. Follow the three-departments-six-ministries skill for the full procedure; this section only states the enforced state machine.
+export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù Bù — "Three Departments and Six Ministries"), for complex multi-deliverable work. The tool contract and state machine below are the authoritative procedure. If a three-departments-six-ministries skill is installed, use it only for role detail; the enforced rules below always win.
 
 Every mutating tool takes expected_revision (the revision you last read from sansheng_board). A stale value is rejected — read the board again, do not guess. Every committed step increments the board revision.
 
