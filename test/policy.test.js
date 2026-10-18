@@ -285,6 +285,17 @@ test('the board keeps a bounded audit history and folds denied calls', () => {
   assert.equal(denied.updatedAt, 1234567890)
 })
 
+test('board alerts escalate a stalled board through three levels', () => {
+  const base = closedState()
+  const at = (minutes) => ({ ...base, updatedAt: Date.now() - minutes * 60 * 1000 })
+  const warn = boardAlerts(at(35), [{ id: 'task-1', status: 'completed' }])
+  assert.ok(warn.some((line) => line.includes('先 sansheng_board')))
+  const escalate = boardAlerts(at(65), [{ id: 'task-1', status: 'completed' }])
+  assert.ok(escalate.some((line) => line.includes('interrupt_agent')))
+  const emperor = boardAlerts(at(125), [{ id: 'task-1', status: 'completed' }])
+  assert.ok(emperor.some((line) => line.includes('上奏')))
+})
+
 test('board alerts expose unfinished work and stale boards', () => {
   const state = closedState()
   const alerts = boardAlerts(state, [
@@ -446,6 +457,48 @@ test('a pass must cite checked items and be cast by an independent teammate', ()
     () => validateGateInput(state, { kind: 'plan', verdict: 'pass', defects: ['oops'], checked: ['x'], expected_revision: state.revision }, REVIEWER),
     'DEFECTS_ON_PASS',
   )
+})
+
+test('a user /sansheng command records 御批 and gates large-tier appointments', () => {
+  let state = planPass(activeState(baseEdict({ tier: 'large', rosterCap: 9 })))
+  assertCode(
+    () => validateAppointInput(state, { member: 'gongbu', department: '工部', expected_revision: state.revision }, LEAD),
+    'USER_APPROVAL_REQUIRED',
+  )
+  state = foldEvent(state, {
+    type: 'command/run',
+    time: 1700000000000,
+    data: { name: 'sansheng', args: 'approve 计划可以', source: { kind: 'user' } },
+  })
+  assert.equal(state.approvals.length, 1)
+  assert.equal(state.approvals[0].decision, 'approve')
+  assert.equal(state.approvals[0].reason, '计划可以')
+  assert.equal(state.history.at(-1).op, 'approval')
+  const appointmentResult = validateAppointInput(state, { member: 'gongbu', department: '工部', expected_revision: state.revision }, LEAD)
+  assert.equal(appointmentResult.member, 'gongbu')
+
+  state = foldEvent(state, {
+    type: 'command/run',
+    time: 1700000001000,
+    data: { name: 'sansheng', args: 'reject 预算不清', source: { kind: 'user' } },
+  })
+  assert.equal(state.approvals.at(-1).decision, 'reject')
+  assertCode(
+    () => validateAppointInput(state, { member: 'xingbu', department: '刑部', expected_revision: state.revision }, LEAD),
+    'USER_REJECTED_PLAN',
+  )
+})
+
+test('御批 before the plan gate is denied and does not record approval', () => {
+  const state = activeState()
+  const denied = foldEvent(state, {
+    type: 'command/run',
+    time: 1700000000000,
+    data: { name: 'sansheng', args: 'approve too early', source: { kind: 'user' } },
+  })
+  assert.equal(denied.approvals.length, 0)
+  assert.equal(denied.history.at(-1).op, 'denied')
+  assert.equal(denied.history.at(-1).code, 'USER_APPROVAL_NOT_READY')
 })
 
 test('the plan must be revised after a 封驳 before it can pass again', () => {

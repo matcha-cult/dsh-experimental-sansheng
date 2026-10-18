@@ -153,6 +153,7 @@ window.__ModuleLoader__.load({
 				gate: "审议",
 				evidence: "取证",
 				close: "结案",
+				approval: "御批",
 				denied: "拒绝",
 			})[op] ?? op;
 		}
@@ -160,6 +161,7 @@ window.__ModuleLoader__.load({
 		function eventTone(entry) {
 			if (entry.op === "denied") return "dss-event-denied";
 			if (entry.op === "gate") return entry.verdict === "pass" ? "dss-event-pass" : "dss-event-reject";
+			if (entry.op === "approval") return entry.decision === "approve" ? "dss-event-pass" : "dss-event-reject";
 			if (entry.op === "mode" || entry.op === "edict" || entry.op === "appoint") return "dss-event-info";
 			return "";
 		}
@@ -181,11 +183,23 @@ window.__ModuleLoader__.load({
 					return "取证 " + String(entry.taskId ?? "?") + " · " + String(entry.command ?? "");
 				case "close":
 					return "结案：" + String((entry.conclusions ?? [])[0] ?? "");
+				case "approval":
+					return "御批" + (entry.decision === "approve" ? "准奏" : "封驳") + (entry.reason ? "：" + entry.reason : "");
 				case "denied":
 					return "拒绝 " + String(entry.code ?? "") + "：" + String(entry.message ?? "").replace(/^[A-Z_]+:\s*/, "");
 				default:
 					return String(entry.op ?? "");
 			}
+		}
+
+		function latestApprovalLabel(board, plan) {
+			const approvals = Array.isArray(board.approvals) ? board.approvals : [];
+			const approval = approvals.length === 0 ? null : approvals[approvals.length - 1];
+			if (approval !== null && plan !== null && approval.rev > plan.rev) {
+				return approval.decision === "approve" ? "已准奏" : "已封驳";
+			}
+			if (board.edict !== null && board.edict.tier === "large" && plan !== null && plan.verdict === "pass") return "待御批";
+			return "—";
 		}
 
 		function GateSection(props) {
@@ -309,6 +323,7 @@ window.__ModuleLoader__.load({
 					h("span", { className: "dss-chip" }, "rev ", h("b", null, String(board.revision ?? 0))),
 					h("span", { className: "dss-chip" }, "计划门 ", h("b", null, plan === null ? "待审" : plan.verdict === "pass" ? "通过" : "封驳")),
 					h("span", { className: "dss-chip" }, "成果门 ", h("b", null, result === null ? "待审" : result.verdict === "pass" ? "通过" : "封驳")),
+					h("span", { className: "dss-chip" }, "御批 ", h("b", null, latestApprovalLabel(board, plan))),
 					h("span", { className: "dss-chip" }, "任务 ", h("b", null, completed + "/" + tasks.length)),
 					h("span", { className: "dss-chip" }, "证据 ", h("b", null, String(board.evidence.length))),
 					h("span", { className: "dss-chip" }, board.closure === null ? "进行中" : "已结案"),

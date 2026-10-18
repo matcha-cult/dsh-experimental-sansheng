@@ -55,6 +55,7 @@ const AUDIT_CODES = new Set([
   'ROSTER_CAP_ABOVE_TIER', 'ROSTER_CAP_EXCEEDED', 'SELF_REVIEW_NOT_ALLOWED',
   'SMALL_TIER_NEEDS_NO_TEAM', 'STALE_REVISION', 'TASK_NOT_COMPLETED',
   'TASK_NOT_FOUND', 'TASK_REVIEWS_INCOMPLETE', 'TASK_REVIEWS_REQUIRED',
+  'USER_APPROVAL_NOT_READY', 'USER_APPROVAL_REQUIRED', 'USER_REJECTED_PLAN',
   'TASK_REVIEW_NOT_PASS', 'UNKNOWN_DEPARTMENT', 'UNKNOWN_REVIEW_TASK',
 ])
 
@@ -128,6 +129,7 @@ export function createEmptyState() {
     evidence: [],
     closure: null,
     abandoned: null,
+    approvals: [],
     history: [],
     updatedAt: null,
     revision: 0,
@@ -359,6 +361,38 @@ export function foldEvent(state, event, presetId) {
     }
     return state
   }
+  if (type === 'command/run') {
+    const name = event.data?.name
+    if (name !== 'sansheng') return state
+    const raw = typeof event.data?.args === 'string' ? event.data.args.trim() : ''
+    const tokens = raw.split(/\s+/).filter((token) => token !== '')
+    const verb = tokens[0]
+    if (verb !== 'approve' && verb !== 'reject') return state
+    const plan = latestGate(state, 'plan')
+    if (state.active !== true || state.closure !== null || plan === undefined || plan.verdict !== 'pass') {
+      return withHistory(state, {
+        op: 'denied',
+        rev: state.revision,
+        at: eventTime,
+        by: 'user',
+        code: 'USER_APPROVAL_NOT_READY',
+        message: 'USER_APPROVAL_NOT_READY: 御批必须在模式激活且计划门通过后进行',
+      })
+    }
+    const revision = (state.revision ?? 0) + 1
+    const approval = {
+      id: `ua-${(state.approvals ?? []).length + 1}`,
+      decision: verb === 'approve' ? 'approve' : 'reject',
+      reason: tokens.length > 1 ? tokens.slice(1).join(' ') : null,
+      by: 'user',
+      at: eventTime,
+      rev: revision,
+    }
+    return withHistory(
+      commit(state, { approvals: [...(state.approvals ?? []), approval] }, revision),
+      { op: 'approval', rev: revision, at: eventTime, by: 'user', decision: approval.decision, reason: approval.reason },
+    )
+  }
   if (type === 'user/message') {
     const content = event.data?.content
     if (!Array.isArray(content)) return state
@@ -476,6 +510,13 @@ export function summarizeBoard(state, tasks = []) {
     completedTasks: tasks.filter((task) => task?.status === 'completed').map((task) => task.id),
     missingEvidence: completedTasksWithoutEvidence(state, tasks),
     taskReviews: resultGate === undefined ? [] : resultGate.reviews,
+    approvals: (state.approvals ?? []).map((approval) => ({
+      decision: approval.decision,
+      reason: approval.reason,
+      at: approval.at,
+      rev: approval.rev,
+    })),
+    userApproval: (state.approvals ?? []).length === 0 ? null : (state.approvals ?? [])[state.approvals.length - 1],
     alerts: boardAlerts(state, tasks),
     closure: state.closure === null ? null : {
       conclusions: state.closure.conclusions,
@@ -506,6 +547,15 @@ export function boardAlerts(state, tasks = [], now = Date.now()) {
   const result = latestGate(state, 'result')
   if (state.edict !== null && plan === undefined) alerts.push('计划门未审：需要门下省 sansheng_gate {kind:"plan"}。')
   if (plan !== undefined && plan.verdict === 'reject') alerts.push('计划被门封驳：按 defects 整改并重新拟旨。')
+  if (state.edict !== null && state.edict.tier === 'large' && plan?.verdict === 'pass' && state.closure === null) {
+    const approvals = Array.isArray(state.approvals) ? state.approvals : []
+    const approval = approvals[approvals.length - 1]
+    if (approval === undefined || approval.rev <= plan.rev) {
+      alerts.push('large 任务等待御批：请用户运行 /sansheng approve（或 reject）。')
+    } else if (approval.decision === 'reject') {
+      alerts.push('用户已封驳计划：修改制敕后重新过计划门，再请御批。')
+    }
+  }
   if (state.edict !== null && plan?.verdict === 'pass' && state.edict.tier !== 'small'
     && state.appointments.length === 0) {
     alerts.push('计划已过门但尚未派工：先 sansheng_appoint。')
@@ -521,8 +571,15 @@ export function boardAlerts(state, tasks = [], now = Date.now()) {
   if (result !== undefined && result.verdict === 'pass' && result.reviews.length < completed.length) {
     alerts.push('成果门通过但逐任务 review 不完整。')
   }
-  if (state.updatedAt !== null && now - state.updatedAt > STALL_MS) {
-    alerts.push(`看板已 ${Math.round((now - state.updatedAt) / 60000)} 分钟无新记录，检查成员是否停滞。`)
+  if (state.updatedAt !== null) {
+    const idleMinutes = Math.round((now - state.updatedAt) / 60000)
+    if (idleMinutes >= 120) {
+      alerts.push(`看板已 ${idleMinutes} 分钟无新记录：必须向用户（皇上）上奏并等待指示，不得自行放宽验收。`)
+    } else if (idleMinutes >= 60) {
+      alerts.push(`看板已 ${idleMinutes} 分钟无新记录：对停滞成员执行 interrupt_agent 并 reassign，或上奏用户。`)
+    } else if (idleMinutes >= 30) {
+      alerts.push(`看板已 ${idleMinutes} 分钟无新记录：先 sansheng_board，再检查停滞成员。`)
+    }
   }
   return alerts
 }
@@ -640,8 +697,19 @@ export function validateAppointInput(state, input, caller) {
   assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (政事堂) may appoint 六部')
-  if (latestGate(state, 'plan')?.verdict !== 'pass') {
+  const planGate = latestGate(state, 'plan')
+  if (planGate?.verdict !== 'pass') {
     fail('PLAN_GATE_NOT_PASSED', 'the 门下省 plan gate must pass before 尚书省 dispatches the 六部')
+  }
+  if (state.edict.tier === 'large') {
+    const approvals = Array.isArray(state.approvals) ? state.approvals : []
+    const approval = approvals[approvals.length - 1]
+    if (approval === undefined || approval.rev <= planGate.rev) {
+      fail('USER_APPROVAL_REQUIRED', 'large tier needs the user to run /sansheng approve after the plan gate passes before any appointment')
+    }
+    if (approval.decision !== 'approve') {
+      fail('USER_REJECTED_PLAN', 'the user rejected this plan; revise the edict and pass the plan gate again')
+    }
   }
   if (state.edict.tier === 'small') {
     fail('SMALL_TIER_NEEDS_NO_TEAM', 'small tier runs without teammates; do not appoint 六部')

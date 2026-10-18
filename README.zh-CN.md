@@ -123,6 +123,8 @@ dsh plugin --profile web add dsh-experimental-sansheng
 - **证据硬化**：证据只能覆盖**已完成**任务，必须带十六进制 `digest` 和非空 `excerpt`，重复证据被拒。
 - **离开模式**：必须先 `sansheng_close`，或传 `abandon_reason` 显式放弃（看板记录）。
 - **结案**：所有共享任务必须处于 completed/deleted，不能带着未完成任务结案。
+- **御批（large 任务）**：计划门通过后，用户需在 Lead 会话运行 `/sansheng approve [备注]`（或 `/sansheng reject [备注]`）才能任命六部；模型自称用户同意无效，御批来自会话日志里的真实 `command/run` 事件。
+- **停滞升级**：看板 30 分钟无新记录→先查停滞成员；60 分钟→interrupt/reassign 或上奏；120 分钟→必须由用户决定，不得自行放宽验收。
 
 任意成员都可以随时 `sansheng_board` 读当前看板；Lead 可以 `sansheng_mode {action:"status"}` 查看摘要。会话页头的「三省六部」按钮会打开完整看板抽屉：**总览 / 任务 / 审议 / 证据 / 时间线**五个页签；模式激活时会自动打开。时间线包含被拒绝的调用（denied）与所有模式/拟旨/任命/审议/取证/结案记录，模式激活后会保留最近 200 条。
 

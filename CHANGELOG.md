@@ -4,6 +4,21 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.2] — 2026-10-18
+
+### Added
+
+- **Human 御批 (user approval)**: the host registers `/sansheng approve|reject|status`.
+  `/sansheng approve [备注]` records a real user decision in the Lead session
+  log (folded from the `command/run` event, not a model claim). Large-tier
+  appointments now require a user approval newer than the latest plan gate;
+  a user rejection blocks dispatch until the plan is revised and re-reviewed.
+- **Stall escalation ladder** in board alerts: 30 min → read the board and
+  inspect stalled members; 60 min → interrupt/reassign or report to the user;
+  120 min → the user must decide, no unilateral relaxation of acceptance.
+- Board approval timeline entries (`御批`), an overview approval chip, and a
+  red-zone warning while a large plan waits for 御批.
+
 ## [0.2.1] — 2026-10-18
 
 ### Added

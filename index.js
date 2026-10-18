@@ -26,6 +26,7 @@ import { z as zod } from 'zod'
 import {
   DEFAULT_SECTION,
   SanshengError,
+  boardAlerts,
   createEmptyState,
   createInitialState,
   foldEvent,
@@ -130,6 +131,14 @@ function stateSchema() {
     evidence: zod.array(evidence),
     closure: closure.nullable(),
     abandoned: zod.object({ reason: zod.string(), at: zod.number().nullable() }).nullable(),
+    approvals: zod.array(zod.object({
+      id: zod.string(),
+      decision: zod.string(),
+      reason: zod.string().nullable(),
+      by: zod.string(),
+      at: zod.number().nullable(),
+      rev: zod.number(),
+    })),
     history: zod.array(zod.any()),
     updatedAt: zod.number().nullable(),
     revision: zod.number(),
@@ -361,7 +370,7 @@ export function apply(ctx, config = {}) {
       if (agent === undefined || agent === null || agent.session === undefined) return ''
       const state = boardOf(agent)
       if (state.active !== true) return ''
-      return renderPolicy(settings.section, state)
+      return renderPolicy(settings.section, state, tasksOf(agent))
     },
   }), 'sansheng: policy section')
 
@@ -735,6 +744,61 @@ export function apply(ctx, config = {}) {
       return JSON.stringify(summarizeBoard(boardView(agent), tasksOf(agent)))
     },
   })
+
+  /* ---------------------------------------------------------------- */
+  /* Human command: /sansheng approve|reject|status                    */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Execute one user-typed 御批. The authoritative record is the
+   * `command/run` event itself: the projection folds it into `approvals`
+   * after validating that the mode is active and the plan gate has passed.
+   * @param {object} invocation Command invocation.
+   * @returns {Promise<{kind: 'success'|'error', text?: string}>} UI result.
+   */
+  async function runSanshengCommand(invocation) {
+    const agent = invocation?.agent
+    const tokens = typeof invocation?.rawInput === 'string'
+      ? invocation.rawInput.trim().split(/\s+/).filter((token) => token !== '')
+      : []
+    const verb = tokens[0]
+    try {
+      const caller = memberOf(agent)
+      const isLeadSession = caller.leadSession?.header?.id !== undefined
+        && caller.leadSession.header.id === agent?.session?.header?.id
+      if (verb === 'status' || verb === undefined) {
+        if (isLeadSession) return { kind: 'success', text: JSON.stringify(summarizeBoard(boardView(agent), tasksOf(agent))) }
+        return { kind: 'success', text: '用法：/sansheng approve [备注] | /sansheng reject [备注] | /sansheng status（在政事堂会话中查看）' }
+      }
+      if (verb !== 'approve' && verb !== 'reject') {
+        return { kind: 'error', text: '用法：/sansheng approve [备注] | /sansheng reject [备注] | /sansheng status' }
+      }
+      if (!isLeadSession) return { kind: 'error', text: '御批只能在政事堂（Lead）会话中进行' }
+      const state = boardOf(agent)
+      if (state.active !== true) return { kind: 'error', text: '三省六部模式未激活' }
+      if (state.closure !== null) return { kind: 'error', text: '案件已结案，不能再御批' }
+      const plan = latestGate(state, 'plan')
+      if (plan === undefined || plan.verdict !== 'pass') {
+        return { kind: 'error', text: '计划门尚未通过，御批必须在门下省审议通过后进行' }
+      }
+      const reason = tokens.length > 1 ? tokens.slice(1).join(' ') : ''
+      const verbLabel = verb === 'approve' ? '准奏' : '封驳'
+      return { kind: 'success', text: `已记录御批：${verbLabel}${reason === '' ? '' : ' · ' + reason}（看板 rev 将推进）` }
+    } catch (error) {
+      return { kind: 'error', text: String(error?.message ?? error) }
+    }
+  }
+
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['commands'], (commandCtx) => {
+      commandCtx.effect(() => commandCtx.commands.register({
+        name: 'sansheng',
+        description: '三省六部：/sansheng approve|reject [备注] 御批计划；/sansheng status 查看看板。',
+        input: { hint: 'approve [备注] | reject [备注] | status' },
+        handler: runSanshengCommand,
+      }), 'sansheng: command')
+    })
+  }
 }
 
 /**
@@ -743,9 +807,12 @@ export function apply(ctx, config = {}) {
  * @param {object} state Board state.
  * @returns {string} Prompt section text.
  */
-function renderPolicy(section, state) {
+function renderPolicy(section, state, tasks = []) {
   const plan = latestGate(state, 'plan')
   const result = latestGate(state, 'result')
+  const approvals = Array.isArray(state.approvals) ? state.approvals : []
+  const approval = approvals.length === 0 ? null : approvals[approvals.length - 1]
+  const alerts = boardAlerts(state, tasks)
   const lines = [
     section.trim(),
     '',
@@ -760,6 +827,8 @@ function renderPolicy(section, state) {
     `- result gate: ${result === undefined ? 'pending' : `${result.verdict} by ${result.reviewer}`}`,
     `- closure: ${state.closure === null ? 'open' : `closed by ${state.closure.closedBy}`}`,
     `- abandoned: ${state.abandoned === null ? 'no' : `yes (${state.abandoned.reason})`}`,
+    `- user approval: ${approval === null ? 'none' : `${approval.decision} at rev ${approval.rev}`}`,
+    ...(alerts.length === 0 ? [] : ['', 'Board alerts (act on these before continuing):', ...alerts.map((line) => `- ${line}`)]),
   ]
   return lines.join('\n')
 }
