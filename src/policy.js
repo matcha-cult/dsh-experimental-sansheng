@@ -38,15 +38,17 @@ export const RECORD_OPS = Object.freeze(['mode', 'edict', 'appoint', 'gate', 'ev
 /** Deployment-owned default guidance rendered while the mode is active. */
 export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù Bù — "Three Departments and Six Ministries"), for complex multi-deliverable work. Follow the three-departments-six-ministries skill for the full procedure; this section only states the enforced state machine.
 
+Every mutating tool takes expected_revision (the revision you last read from sansheng_board). A stale value is rejected — read the board again, do not guess. Every committed step increments the board revision.
+
 Procedure (all state is recorded in this session's event log — never coordinate through files or temp directories):
 1. 政事堂 (Lead) drafts the edict: sansheng_edict {goal, acceptance, boundaries, tier, roster_cap, departments}.
-2. 门下省 reviews the plan: an independent teammate calls sansheng_gate {kind: "plan", verdict}. The Lead can never approve its own plan.
+2. 门下省 reviews the plan: an independent teammate calls sansheng_gate {kind: "plan", verdict, checked}. The Lead can never approve its own plan; a pass must cite at least one checked item. A reject must carry defects; after a reject, revise the edict before a new plan review.
 3. Only after the plan gate passes: sansheng_appoint each teammate to one of the 六部, then create team tasks and spawn teammates.
-4. 六部 execute. 刑部 submits reproducible evidence with sansheng_evidence {task_id, command, exit_code, digest?, excerpt?}.
-5. 门下省 reviews the result: a teammate not appointed to any 部 calls sansheng_gate {kind: "result", verdict}.
-6. Only after both gates pass and every completed task has evidence, the Lead calls sansheng_close and reports the result.
+4. 六部 execute. 刑部 submits evidence for a completed shared task: sansheng_evidence {task_id, command, exit_code, digest, excerpt}. A digest (hex) and a bounded excerpt are required.
+5. 门下省 reviews the result: a different teammate (never the plan reviewer, never a task owner) calls sansheng_gate {kind: "result", verdict, checked, reviews}. For a pass, reviews must cover every completed shared task with verdict "pass".
+6. Only after both gates pass, every shared task is completed or deleted, and every completed task has evidence, the Lead calls sansheng_close and reports the result.
 
-Hard gates enforced by the tools: appointing before the plan gate passes is rejected; self-review is rejected; closing before both gates pass is rejected. Never claim completion before sansheng_close returns. Use sansheng_board for the current board state.`
+Leaving the mode requires a closed case or an explicit abandon_reason; abandoning is recorded on the board. Closing with unfinished shared tasks is rejected. Never claim completion before sansheng_close returns. Use sansheng_board for the current board state and revision.`
 
 /** One typed failure from the 三省六部 policy layer. */
 export class SanshengError extends Error {
@@ -101,6 +103,7 @@ export function createEmptyState() {
     gates: [],
     evidence: [],
     closure: null,
+    abandoned: null,
     revision: 0,
   }
 }
@@ -159,28 +162,40 @@ export function parseRecordText(text) {
  */
 export function applyRecord(state, record) {
   if (record === null || typeof record !== 'object') return state
+  const { revision, stale } = recordRevision(state, record)
+  if (stale) return state
   switch (record.op) {
-    case 'mode':
-      return typeof record.active === 'boolean' ? commit(state, { active: record.active }) : state
+    case 'mode': {
+      if (typeof record.active !== 'boolean') return state
+      if (record.active === true) return commit(state, { active: true, abandoned: null }, revision)
+      const patch = { active: false }
+      if (typeof record.abandoned === 'string' && record.abandoned.trim() !== '') {
+        patch.abandoned = {
+          reason: record.abandoned.trim(),
+          at: typeof record.abandonedAt === 'number' ? record.abandonedAt : null,
+        }
+      }
+      return commit(state, patch, revision)
+    }
     case 'edict': {
       const edict = normalizeStoredEdict(record.edict)
-      return edict === null ? state : commit(state, { edict })
+      return edict === null ? state : commit(state, { edict }, revision)
     }
     case 'appoint': {
       const appointment = normalizeStoredAppointment(record.appointment)
-      return appointment === null ? state : commit(state, { appointments: [...state.appointments, appointment] })
+      return appointment === null ? state : commit(state, { appointments: [...state.appointments, appointment] }, revision)
     }
     case 'gate': {
       const gate = normalizeStoredGate(record.gate)
-      return gate === null ? state : commit(state, { gates: [...state.gates, gate] })
+      return gate === null ? state : commit(state, { gates: [...state.gates, gate] }, revision)
     }
     case 'evidence': {
       const evidence = normalizeStoredEvidence(record.evidence)
-      return evidence === null ? state : commit(state, { evidence: [...state.evidence, evidence] })
+      return evidence === null ? state : commit(state, { evidence: [...state.evidence, evidence] }, revision)
     }
     case 'close': {
       const closure = normalizeStoredClosure(record.closure)
-      return closure === null ? state : commit(state, { closure })
+      return closure === null ? state : commit(state, { closure }, revision)
     }
     default:
       return state
@@ -231,13 +246,32 @@ export function foldEvent(state, event, presetId) {
 }
 
 /**
- * Replace selected fields and bump the projection revision.
+ * Replace selected fields and set the projection revision.
  * @param {object} state Previous state.
  * @param {object} patch Fields to replace.
+ * @param {number} [revision] Absolute revision; defaults to the next step.
  * @returns {object} Next state.
  */
-function commit(state, patch) {
-  return { ...state, ...patch, revision: (state.revision ?? 0) + 1 }
+function commit(state, patch, revision) {
+  const next = Number.isInteger(revision) && revision > 0 ? revision : (state.revision ?? 0) + 1
+  return { ...state, ...patch, revision: next }
+}
+
+/**
+ * Resolve one record's target revision.
+ *
+ * A record written by the CAS-aware tools carries its reserved `rev`; a record
+ * from an older build carries none and replays as one sequential step. A `rev`
+ * that is not newer than the folded state is a stale concurrent write and must
+ * not move the board.
+ * @param {object} state Current state.
+ * @param {object} record Parsed record.
+ * @returns {{revision: number, stale: boolean}} Target revision and staleness.
+ */
+function recordRevision(state, record) {
+  const explicit = Number.isInteger(record.rev) && record.rev > 0 ? record.rev : null
+  if (explicit === null) return { revision: (state.revision ?? 0) + 1, stale: false }
+  return { revision: explicit, stale: explicit <= (state.revision ?? 0) }
 }
 
 /**
@@ -290,6 +324,10 @@ export function summarizeBoard(state, tasks = []) {
   const resultGate = latestGate(state, 'result')
   return {
     active: state.active,
+    revision: state.revision,
+    abandoned: state.abandoned,
+    planRounds: 1 + state.gates.filter((gate) => gate.kind === 'plan' && gate.verdict === 'reject').length,
+    resultRounds: 1 + state.gates.filter((gate) => gate.kind === 'result' && gate.verdict === 'reject').length,
     edict: state.edict === null ? null : {
       revision: state.edict.revision,
       goal: state.edict.goal,
@@ -307,6 +345,7 @@ export function summarizeBoard(state, tasks = []) {
     evidenceCount: state.evidence.length,
     completedTasks: tasks.filter((task) => task?.status === 'completed').map((task) => task.id),
     missingEvidence: completedTasksWithoutEvidence(state, tasks),
+    taskReviews: resultGate === undefined ? [] : resultGate.reviews,
     closure: state.closure === null ? null : {
       conclusions: state.closure.conclusions,
       deliverables: state.closure.deliverables,
@@ -327,7 +366,10 @@ function compactGate(gate) {
     verdict: gate.verdict,
     reviewer: gate.reviewer,
     defects: gate.defects,
+    checked: gate.checked,
+    reviews: gate.reviews,
     summary: gate.summary,
+    rev: gate.rev,
     at: gate.createdAt,
   }
 }
@@ -337,23 +379,63 @@ function compactGate(gate) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Validate a mode transition request.
- * @param {unknown} action Raw action value.
- * @returns {'enter'|'leave'|'status'} Normalized action.
+ * Require the caller's expected projection revision (CAS guard).
+ *
+ * Every mutating tool must echo the `revision` it last read from
+ * `sansheng_board`; a different value means another agent committed first and
+ * the caller's decision may be based on a stale board.
+ * @param {object} state Board state.
+ * @param {object} input Raw tool arguments.
+ * @returns {void}
  */
-export function validateModeAction(action) {
+function assertExpectedRevision(state, input) {
+  const expected = input?.expected_revision
+  if (!Number.isInteger(expected)) {
+    fail('MISSING_EXPECTED_REVISION', `pass expected_revision = ${state.revision} (read sansheng_board first)`)
+  }
+  if (expected !== state.revision) {
+    fail('STALE_REVISION', `expected revision ${expected} but the board is at ${state.revision}; call sansheng_board and retry`)
+  }
+}
+
+/**
+ * Validate a mode transition request.
+ * @param {object} state Board state.
+ * @param {object} input Raw tool arguments.
+ * @returns {{action: 'enter'|'leave'|'status', abandonReason: string|null}} Normalized action.
+ */
+export function validateModeAction(state, input) {
+  const action = input?.action
   if (action !== 'enter' && action !== 'leave' && action !== 'status') {
     fail('INVALID_ACTION', 'action must be one of: enter, leave, status')
   }
-  return action
+  if (action === 'status') return { action, abandonReason: null }
+  assertExpectedRevision(state, input)
+  if (action === 'enter') {
+    if (state.closure !== null) {
+      fail('CASE_ALREADY_CLOSED', 'this case is already closed; start a new session for a new case')
+    }
+    return { action, abandonReason: null }
+  }
+  if (state.closure !== null) return { action, abandonReason: null }
+  let abandonReason = null
+  if (input?.abandon_reason !== undefined && input.abandon_reason !== null) {
+    abandonReason = requiredString(input.abandon_reason, 'abandon_reason', 2000)
+  }
+  if (abandonReason === null) {
+    fail('LEAVE_REQUIRES_CLOSE_OR_ABANDON', 'close the case with sansheng_close, or pass abandon_reason to record why the case is being dropped')
+  }
+  return { action, abandonReason }
 }
 
 /**
  * Validate and normalize an edict (制敕) draft.
+ * @param {object} state Board state.
  * @param {object} input Raw tool arguments.
  * @returns {{goal: string, acceptance: string[], boundaries: string[], tier: 'small'|'medium'|'large', rosterCap: number, departments: string[]}} Normalized edict.
  */
-export function validateEdictInput(input) {
+export function validateEdictInput(state, input) {
+  assertExpectedRevision(state, input)
   const goal = requiredString(input?.goal, 'goal', 4000)
   const acceptance = stringList(input?.acceptance, 'acceptance', 1, 20)
   const boundaries = stringList(input?.boundaries, 'boundaries', 0, 20)
@@ -384,6 +466,7 @@ export function validateEdictInput(input) {
  * @returns {{member: string, department: string, responsibility: string|null, writeScopes: string[]}} Normalized appointment.
  */
 export function validateAppointInput(state, input, caller) {
+  assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (政事堂) may appoint 六部')
   if (latestGate(state, 'plan')?.verdict !== 'pass') {
@@ -413,13 +496,54 @@ export function validateAppointInput(state, input, caller) {
 }
 
 /**
+ * Normalize one per-task result review list: every completed task must be
+ * reviewed exactly once and all reviews must pass before the result gate can.
+ * @param {unknown} value Raw `reviews` value.
+ * @param {Array<object>} tasks Current Team task views.
+ * @returns {Array<{taskId: string, verdict: 'pass', defects: string[]}>} Reviews.
+ */
+function reviewList(value, tasks) {
+  const completed = tasks
+    .filter((task) => task?.status === 'completed' && typeof task.id === 'string')
+    .map((task) => task.id)
+  if (value === undefined || value === null) {
+    if (completed.length === 0) return []
+    fail('TASK_REVIEWS_REQUIRED', `a passing result gate needs one review per completed task: ${completed.join(', ')}`)
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    fail('INVALID_FIELD', 'reviews must be a non-empty array for a passing result gate')
+  }
+  if (value.length > 64) fail('INVALID_FIELD', 'reviews must contain at most 64 items')
+  const seen = new Set()
+  const reviews = []
+  for (const [index, item] of value.entries()) {
+    if (item === null || typeof item !== 'object') fail('INVALID_FIELD', `reviews[${index}] must be an object`)
+    const taskId = requiredString(item.task_id, `reviews[${index}].task_id`, 32)
+    if (!completed.includes(taskId)) {
+      fail('UNKNOWN_REVIEW_TASK', `reviews[${index}] names ${taskId}, which is not a completed shared task`)
+    }
+    if (seen.has(taskId)) fail('DUPLICATE_TASK_REVIEW', `${taskId} is reviewed more than once`)
+    seen.add(taskId)
+    if (item.verdict !== 'pass') {
+      fail('TASK_REVIEW_NOT_PASS', `reviews[${index}] for ${taskId} is ${String(item.verdict)}; a passing result gate may only contain passing task reviews`)
+    }
+    reviews.push({ taskId, verdict: 'pass', defects: [] })
+  }
+  const missing = completed.filter((taskId) => !seen.has(taskId))
+  if (missing.length > 0) fail('TASK_REVIEWS_INCOMPLETE', `missing per-task reviews: ${missing.join(', ')}`)
+  return reviews
+}
+
+/**
  * Validate one 门下省 gate verdict.
  * @param {object} state Board state.
  * @param {object} input Raw tool arguments.
  * @param {{role: string, name: string}} caller Resolved Team membership.
- * @returns {{kind: 'plan'|'result', verdict: 'pass'|'reject', defects: string[], summary: string|null}} Normalized gate.
+ * @param {Array<object>} tasks Current Team task views.
+ * @returns {{kind: 'plan'|'result', verdict: 'pass'|'reject', defects: string[], checked: string[], reviews: Array<object>, summary: string|null}} Normalized gate.
  */
-export function validateGateInput(state, input, caller) {
+export function validateGateInput(state, input, caller, tasks = []) {
+  assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'teammate') {
     fail('REVIEWER_MUST_BE_TEAMMATE', 'the reviewer must be an independent teammate; the Lead (and 政事堂) can never approve its own work')
@@ -435,40 +559,74 @@ export function validateGateInput(state, input, caller) {
   if (verdict === 'pass' && defects.length > 0) {
     fail('DEFECTS_ON_PASS', 'a passing verdict cannot carry blocking defects')
   }
+  if (appointedMembers(state).includes(caller.name)) {
+    fail('SELF_REVIEW_NOT_ALLOWED', `${caller.name} is appointed to a 六部 and cannot review its own delivery; the reviewer must be outside the executing ministries`)
+  }
+  if (tasks.some((task) => task !== null && typeof task === 'object' && task.status !== 'deleted' && task.ownerName === caller.name)) {
+    fail('REVIEWER_IS_EXECUTOR', `${caller.name} owns a shared task in this case and cannot review it`)
+  }
+  const checked = verdict === 'pass' ? stringList(input?.checked, 'checked', 1, 20) : []
+  if (verdict === 'pass' && kind === 'plan') {
+    const previous = latestGate(state, 'plan')
+    if (previous !== undefined && previous.verdict === 'reject'
+      && (state.edict.rev === null || state.edict.rev <= previous.rev)) {
+      fail('PLAN_NOT_REVISED', 'the plan was 封驳; revise the edict with sansheng_edict before a new plan review')
+    }
+  }
   if (verdict === 'pass' && kind === 'result' && state.evidence.length === 0) {
     fail('NO_EVIDENCE_TO_REVIEW', 'the result gate needs at least one evidence record submitted by 刑部')
   }
-  if (appointedMembers(state).includes(caller.name)) {
-    fail('SELF_REVIEW_NOT_ALLOWED', `${caller.name} is appointed to a 六部 and cannot review its own delivery; the reviewer must be outside the executing ministries`)
+  let reviews = []
+  if (kind === 'result' && verdict === 'pass') {
+    const planGate = latestGate(state, 'plan')
+    if (planGate !== undefined && planGate.reviewer === caller.name) {
+      fail('REVIEWER_MUST_DIFFER', 'the plan and result gates must be reviewed by different teammates')
+    }
+    const previousResult = latestGate(state, 'result')
+    if (previousResult !== undefined && previousResult.verdict === 'reject') {
+      const latestEvidenceRev = state.evidence.reduce((max, record) => Math.max(max, record.rev ?? 0), 0)
+      if (latestEvidenceRev <= (previousResult.rev ?? 0)) {
+        fail('RESULT_NOT_REVISED', 'the delivery was 封驳; submit new evidence after the rejection before a new result review')
+      }
+    }
+    reviews = reviewList(input?.reviews, tasks)
   }
   const summary = input?.summary === undefined || input.summary === null
     ? null
     : requiredString(input.summary, 'summary', 2000)
-  return { kind, verdict, defects, summary }
+  return { kind, verdict, defects, checked, reviews, summary }
 }
 
 /**
- * Validate one 刑部 evidence record.
+ * Validate one 刑部 evidence record. Evidence must cover a completed shared
+ * task and carry a digest and excerpt; the same command+digest cannot be
+ * submitted twice for one task.
  * @param {object} state Board state.
  * @param {object} input Raw tool arguments.
- * @param {Array<{id: string}>} tasks Current Team task views.
- * @returns {{taskId: string|null, command: string, exitCode: number, digest: string|null, excerpt: string|null, sourceSessionId: string|null}} Normalized evidence.
+ * @param {Array<{id: string, status?: string}>} tasks Current Team task views.
+ * @returns {{taskId: string, command: string, exitCode: number, digest: string, excerpt: string, sourceSessionId: string|null}} Normalized evidence.
  */
 export function validateEvidenceInput(state, input, tasks = []) {
+  assertExpectedRevision(state, input)
   assertActive(state)
+  const taskId = requiredString(input?.task_id, 'task_id', 32)
+  if (!/^task-\d+$/.test(taskId)) fail('INVALID_TASK_ID', 'task_id must look like task-<n>')
+  const task = tasks.find((candidate) => candidate?.id === taskId)
+  if (task === undefined) {
+    fail('TASK_NOT_FOUND', `${taskId} is not on the shared task board; create the task before submitting evidence`)
+  }
+  if (task.status !== 'completed') {
+    fail('TASK_NOT_COMPLETED', `${taskId} is ${String(task.status)}; evidence must cover a completed shared task`)
+  }
   const command = requiredString(input?.command, 'command', 4000)
   const exitCode = input?.exit_code
   if (!Number.isInteger(exitCode)) fail('INVALID_EXIT_CODE', 'exit_code must be an integer process exit code')
-  let taskId = null
-  if (input?.task_id !== undefined && input.task_id !== null && input.task_id !== '') {
-    taskId = requiredString(input.task_id, 'task_id', 32)
-    if (!/^task-\d+$/.test(taskId)) fail('INVALID_TASK_ID', 'task_id must look like task-<n>')
-    if (!tasks.some((task) => task?.id === taskId)) {
-      fail('TASK_NOT_FOUND', `${taskId} is not on the shared task board; create the task before submitting evidence`)
-    }
+  const digest = requiredString(input?.digest, 'digest', 200)
+  if (!/^[a-fA-F0-9]{16,128}$/.test(digest)) fail('INVALID_DIGEST', 'digest must be a hexadecimal output digest (16-128 characters)')
+  const excerpt = requiredString(input?.excerpt, 'excerpt', 8000)
+  if (state.evidence.some((record) => record.taskId === taskId && record.command === command && record.digest === digest)) {
+    fail('DUPLICATE_EVIDENCE', `evidence for ${taskId} with this command and digest is already recorded`)
   }
-  const digest = optionalString(input?.digest, 'digest', 200)
-  const excerpt = optionalString(input?.excerpt, 'excerpt', 8000)
   const sourceSessionId = optionalString(input?.source_session_id, 'source_session_id', 200)
   return { taskId, command, exitCode, digest, excerpt, sourceSessionId }
 }
@@ -482,6 +640,7 @@ export function validateEvidenceInput(state, input, tasks = []) {
  * @returns {{conclusions: string[], deliverables: string[], unknowns: string[], next: string[]}} Normalized closure.
  */
 export function validateCloseInput(state, input, tasks, caller) {
+  assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (政事堂) may close the case')
   if (latestGate(state, 'plan')?.verdict !== 'pass') {
@@ -489,6 +648,12 @@ export function validateCloseInput(state, input, tasks, caller) {
   }
   if (latestGate(state, 'result')?.verdict !== 'pass') {
     fail('RESULT_GATE_NOT_PASSED', 'cannot close before the 门下省 result gate passes')
+  }
+  const openTasks = tasks
+    .filter((task) => task !== null && typeof task === 'object' && task.status !== 'completed' && task.status !== 'deleted')
+    .map((task) => task.id)
+  if (openTasks.length > 0) {
+    fail('OPEN_TASKS', `cannot close with unfinished shared tasks: ${openTasks.join(', ')}`)
   }
   const roster = appointedMembers(state).length
   if (roster > state.edict.rosterCap) {
@@ -609,6 +774,7 @@ function normalizeStoredEdict(value) {
     tier: value.tier,
     rosterCap: value.rosterCap,
     departments: value.departments.filter((item) => typeof item === 'string'),
+    rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
   }
 }
@@ -646,7 +812,18 @@ function normalizeStoredGate(value) {
     verdict: value.verdict,
     reviewer: value.reviewer,
     defects: Array.isArray(value.defects) ? value.defects.filter((item) => typeof item === 'string') : [],
+    checked: Array.isArray(value.checked) ? value.checked.filter((item) => typeof item === 'string') : [],
+    reviews: Array.isArray(value.reviews)
+      ? value.reviews
+        .filter((item) => item !== null && typeof item === 'object' && typeof item.taskId === 'string')
+        .map((item) => ({
+          taskId: item.taskId,
+          verdict: item.verdict === 'pass' ? 'pass' : 'reject',
+          defects: Array.isArray(item.defects) ? item.defects.filter((entry) => typeof entry === 'string') : [],
+        }))
+      : [],
     summary: typeof value.summary === 'string' ? value.summary : null,
+    rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
   }
 }
@@ -669,6 +846,7 @@ function normalizeStoredEvidence(value) {
     excerpt: typeof value.excerpt === 'string' ? value.excerpt : null,
     submittedBy: value.submittedBy,
     sourceSessionId: typeof value.sourceSessionId === 'string' ? value.sourceSessionId : null,
+    rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
     createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
   }
 }

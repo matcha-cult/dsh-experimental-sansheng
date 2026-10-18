@@ -193,6 +193,7 @@ window.__ModuleLoader__.load({
 			const covered = new Set(board.evidence.map((record) => record.taskId).filter((taskId) => typeof taskId === "string"));
 			const missing = completed.filter((task) => covered.has(task.id) === false);
 			const warnings = [];
+			if (board.abandoned !== null && board.abandoned !== undefined) warnings.push("本案件已放弃：" + board.abandoned.reason + "。重新进入模式可继续。");
 			if (board.edict === null) warnings.push("尚未拟旨：先调用 sansheng_edict。");
 			if (board.edict !== null && plan === null) warnings.push("计划门未审：需要门下省用 sansheng_gate {kind:\"plan\"} 审议。");
 			if (plan !== null && plan.verdict === "reject") warnings.push("计划被门封驳：按缺陷清单整改后重新提交审议。");
@@ -200,6 +201,12 @@ window.__ModuleLoader__.load({
 				warnings.push("计划已过门但尚未派工：尚书省应任命六部后再开工。");
 			}
 			if (missing.length > 0) warnings.push("已完成任务缺少证据：" + missing.map((task) => task.id).join(", ") + "。");
+			const result = latestGate(board, "result");
+			if (result !== null && result.verdict === "pass" && Array.isArray(result.reviews)) {
+				const reviewed = new Set(result.reviews.map((review) => review.taskId));
+				const unreviewed = completed.filter((task) => reviewed.has(task.id) === false);
+				if (unreviewed.length > 0) warnings.push("成果门通过但任务缺少逐任务 verdict（旧记录）：" + unreviewed.map((task) => task.id).join(", ") + "。");
+			}
 			if (warnings.length === 0) return null;
 			return h(
 				"div",
@@ -223,6 +230,7 @@ window.__ModuleLoader__.load({
 						{ className: "dss-title" },
 						h("strong", null, "三省六部"),
 						h("span", { className: "dss-pinyin" }, "Sān Shěng Liù Bù"),
+						h("span", { className: "dss-muted" }, "rev " + String(board.revision ?? 0)),
 					),
 					h("button", { className: "dss-close", onClick: onClose, title: "关闭" }, "×"),
 				),

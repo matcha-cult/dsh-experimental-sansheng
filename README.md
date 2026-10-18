@@ -83,15 +83,19 @@ Two entry points:
 - pick the **三省六部** preset when creating a task (requires `dsh-experimental-sansheng-profile`) — the session is in the mode from its first turn;
 - or, in any existing session, say "enter the 三省六部 mode" / call `sansheng_mode {action:"enter"}`.
 
+Every mutating call echoes the `revision` last read from `sansheng_board` as `expected_revision`; a stale value fails instead of letting a late verdict win.
+
 ```text
-1. 政事堂 (Lead)       sansheng_edict
-2. 门下省 (teammate)   sansheng_gate { kind: "plan", verdict }
+1. 政事堂 (Lead)       sansheng_edict { ..., expected_revision }
+2. 门下省 (teammate)   sansheng_gate { kind:"plan", verdict:"pass", checked:[...], expected_revision }
 3. 尚书省 (Lead)       spawn_teammate → sansheng_appoint → team_task_create
 4. 六部                team_task_* / file work
-5. 刑部                sansheng_evidence
-6. 门下省              sansheng_gate { kind: "result", verdict }
-7. 政事堂              sansheng_close → report to the user
+5. 刑部                sansheng_evidence { task_id, command, exit_code, digest, excerpt, expected_revision }
+6. 门下省              sansheng_gate { kind:"result", verdict:"pass", checked, reviews:[one per completed task], expected_revision }
+7. 政事堂              sansheng_close { ..., expected_revision } → report to the user
 ```
+
+Hard invariants since 0.2.0: stale revisions are rejected; a rejected plan must be re-drafted and a rejected result needs new evidence; plan and result gates need different reviewers, and reviewers may not own a shared task; passes cite `checked` items; evidence only covers completed tasks and needs a hex digest plus excerpt; leaving an open case requires `abandon_reason`; closing rejects unfinished shared tasks.
 
 Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`.
 

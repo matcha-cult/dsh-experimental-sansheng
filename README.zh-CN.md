@@ -102,17 +102,27 @@ dsh plugin --profile web add dsh-experimental-sansheng
 - **新建会话时选「三省六部」预设卡**（需安装 `dsh-experimental-sansheng-profile`）：该会话首轮即处于模式中；
 - **任意已有会话**：对 Lead 说“进入三省六部模式”，或调用 `sansheng_mode {action:"enter"}`。
 
-进入后按顺序：
+进入后按顺序（**每次修改前先从 `sansheng_board` 读 `revision`，作为 `expected_revision` 传入**）：
 
 ```text
-1. 政事堂（Lead）拟旨     sansheng_edict
-2. 门下省（独立 teammate）  sansheng_gate { kind: "plan", verdict }
+1. 政事堂（Lead）拟旨     sansheng_edict { ..., expected_revision }
+2. 门下省（独立 teammate）  sansheng_gate { kind:"plan", verdict:"pass", checked:[...], expected_revision }
 3. 尚书省（Lead）派工     spawn_teammate → sansheng_appoint → team_task_create
 4. 六部执行               team_task_* / 文件写入
-5. 刑部取证               sansheng_evidence
-6. 门下省覆核             sansheng_gate { kind: "result", verdict }
-7. 政事堂结案             sansheng_close → 向用户回奏
+5. 刑部取证               sansheng_evidence { task_id, command, exit_code, digest, excerpt, expected_revision }
+6. 门下省覆核             sansheng_gate { kind:"result", verdict:"pass", checked, reviews:[每个已完成任务], expected_revision }
+7. 政事堂结案             sansheng_close { ..., expected_revision } → 向用户回奏
 ```
+
+硬约束（0.2.0 起）：
+
+- **修订号 CAS**：`expected_revision` 过期会被拒（`STALE_REVISION`），不会让迟到的评审覆盖先前的结论。
+- **封驳必须重做**：计划被 reject 后必须重新 `sansheng_edict` 才能再 pass；成果被 reject 后必须补新证据。
+- **评审者独立**：计划门与成果门必须由不同 teammate 审；评审者不得是任何共享任务的执行者。
+- **通过要有凭据**：pass 必须带 `checked`；成果门 pass 还必须带每个已完成任务的 `reviews`。
+- **证据硬化**：证据只能覆盖**已完成**任务，必须带十六进制 `digest` 和非空 `excerpt`，重复证据被拒。
+- **离开模式**：必须先 `sansheng_close`，或传 `abandon_reason` 显式放弃（看板记录）。
+- **结案**：所有共享任务必须处于 completed/deleted，不能带着未完成任务结案。
 
 任意成员都可以随时 `sansheng_board` 读当前看板；Lead 可以 `sansheng_mode {action:"status"}` 查看摘要。
 

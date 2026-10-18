@@ -74,6 +74,7 @@ function stateSchema() {
     tier: zod.string(),
     rosterCap: zod.number(),
     departments: zod.array(zod.string()),
+    rev: zod.number().nullable(),
     createdAt: zod.number().nullable(),
   })
   const appointment = zod.object({
@@ -90,6 +91,13 @@ function stateSchema() {
     verdict: zod.string(),
     reviewer: zod.string(),
     defects: zod.array(zod.string()),
+    checked: zod.array(zod.string()),
+    reviews: zod.array(zod.object({
+      taskId: zod.string(),
+      verdict: zod.string(),
+      defects: zod.array(zod.string()),
+    })),
+    rev: zod.number().nullable(),
     summary: zod.string().nullable(),
     createdAt: zod.number().nullable(),
   })
@@ -102,6 +110,7 @@ function stateSchema() {
     excerpt: zod.string().nullable(),
     submittedBy: zod.string(),
     sourceSessionId: zod.string().nullable(),
+    rev: zod.number().nullable(),
     createdAt: zod.number().nullable(),
   })
   const closure = zod.object({
@@ -120,6 +129,7 @@ function stateSchema() {
     gates: zod.array(gate),
     evidence: zod.array(evidence),
     closure: closure.nullable(),
+    abandoned: zod.object({ reason: zod.string(), at: zod.number().nullable() }).nullable(),
     revision: zod.number(),
   })
 }
@@ -222,6 +232,69 @@ export function apply(ctx, config = {}) {
   }
 
   /**
+   * In-process reservations bridge the gap between a tool's revision check and
+   * the runtime committing its `tool/result` event. Without them two agents can
+   * read the same board revision, both act, and both records would claim the
+   * same next revision.
+   */
+  const pendingRevisions = new Map()
+
+  /**
+   * @param {object} agent Calling Agent.
+   * @returns {string} Lead session key that owns the board.
+   */
+  function leadKey(agent) {
+    const { leadSession } = memberOf(agent)
+    return leadSession?.header?.id ?? leadSession?.id ?? 'lead'
+  }
+
+  /**
+   * Effective board revision, including records already reserved but not yet
+   * committed to the session log.
+   * @param {object} agent Calling Agent.
+   * @returns {number} Revision callers must echo in expected_revision.
+   */
+  function effectiveRevision(agent) {
+    const state = boardOf(agent)
+    return Math.max(state.revision ?? 0, pendingRevisions.get(leadKey(agent)) ?? 0)
+  }
+
+  /**
+   * Board state with the effective revision applied (for validators).
+   * @param {object} agent Calling Agent.
+   * @returns {object} Board view.
+   */
+  function boardView(agent) {
+    const state = boardOf(agent)
+    return { ...state, revision: effectiveRevision(agent) }
+  }
+
+  /**
+   * Reserve the next board revision for one committed record.
+   * @param {object} agent Calling Agent.
+   * @returns {number} Reserved revision.
+   */
+  function reserveRevision(agent) {
+    const key = leadKey(agent)
+    const state = boardOf(agent)
+    const revision = Math.max(state.revision ?? 0, pendingRevisions.get(key) ?? 0) + 1
+    pendingRevisions.set(key, revision)
+    return revision
+  }
+
+  /**
+   * Give back a reservation when publishing a record failed.
+   * @param {object} agent Calling Agent.
+   * @param {number} revision Reserved revision that failed.
+   * @returns {void}
+   */
+  function releaseRevision(agent, revision) {
+    const key = leadKey(agent)
+    if (pendingRevisions.get(key) !== revision) return
+    pendingRevisions.set(key, Math.max(boardOf(agent).revision ?? 0, revision - 1))
+  }
+
+  /**
    * Publish one teammate-side record into the Lead session log.
    *
    * A plugin installed into a profile cannot append an ignorable plugin record
@@ -305,7 +378,7 @@ export function apply(ctx, config = {}) {
 
   registerTool({
     name: 'sansheng_mode',
-    description: 'Enter, leave, or inspect the 三省六部 (Sān Shěng Liù Bù) mode. The mode is recorded in the Lead session event log; there is no shared board file. Only the Lead may enter or leave; any member may inspect.',
+    description: 'Enter, leave, or inspect the 三省六部 (Sān Shěng Liù Bù) mode. The mode is recorded in the Lead session event log; there is no shared board file. Only the Lead may enter or leave; any member may inspect. Enter/leave require expected_revision; leaving an open case also requires abandon_reason.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -315,24 +388,41 @@ export function apply(ctx, config = {}) {
           enum: ['enter', 'leave', 'status'],
           description: 'enter: start the mode for this Team. leave: stop enforcing it. status: return the compact board summary.',
         },
+        expected_revision: {
+          type: 'integer',
+          description: 'Board revision read from sansheng_board; required for enter and leave.',
+        },
+        abandon_reason: {
+          type: 'string',
+          description: 'Required to leave an open case without closing it; recorded on the board as an abandoned case.',
+        },
       },
       required: ['action'],
     },
     output: textOutput,
     async execute(args, exec) {
       const agent = requireAgent(exec, 'sansheng_mode')
-      const action = validateModeAction(args?.action)
-      if (action === 'status') {
-        return JSON.stringify(summarizeBoard(boardOf(agent), tasksOf(agent)))
-      }
       const caller = memberOf(agent)
+      if (args?.action === 'status') {
+        return JSON.stringify(summarizeBoard(boardView(agent), tasksOf(agent)))
+      }
       if (caller.role !== 'lead') {
         throw new SanshengError('LEAD_ONLY', 'only the Lead (政事堂) may enter or leave 三省六部 mode')
       }
-      const active = action === 'enter'
       const state = boardOf(agent)
-      if (state.active === active) return serializeRecord('mode', { active, changed: false })
-      return serializeRecord('mode', { active, changed: true })
+      const normalized = validateModeAction(boardView(agent), args)
+      const active = normalized.action === 'enter'
+      const abandoning = normalized.abandonReason !== null && state.abandoned === null
+      if (state.active === active && !abandoning) {
+        return JSON.stringify({ active, changed: false, revision: effectiveRevision(agent) })
+      }
+      const revision = reserveRevision(agent)
+      const payload = { rev: revision, active, changed: true }
+      if (normalized.abandonReason !== null) {
+        payload.abandoned = normalized.abandonReason
+        payload.abandonedAt = Date.now()
+      }
+      return serializeRecord('mode', payload)
     },
   })
 
@@ -368,8 +458,12 @@ export function apply(ctx, config = {}) {
           items: { type: 'string' },
           description: 'Executing ministries this job needs, e.g. 工部, 刑部, 礼部.',
         },
+        expected_revision: {
+          type: 'integer',
+          description: 'Board revision read from sansheng_board.',
+        },
       },
-      required: ['goal', 'acceptance', 'tier'],
+      required: ['goal', 'acceptance', 'tier', 'expected_revision'],
     },
     output: textOutput,
     async execute(args, exec) {
@@ -377,13 +471,11 @@ export function apply(ctx, config = {}) {
       const caller = memberOf(agent)
       if (caller.role !== 'lead') throw new SanshengError('LEAD_ONLY', 'only the Lead (政事堂) drafts the edict')
       const state = boardOf(agent)
-      if (state.active !== true) {
-        throw new SanshengError('MODE_NOT_ACTIVE', 'enter 三省六部 mode first with sansheng_mode {action: "enter"}')
-      }
-      const normalized = validateEdictInput(args)
-      const revision = (state.edict === null ? 0 : state.edict.revision) + 1
-      const edict = { revision, ...normalized, createdAt: Date.now() }
-      return serializeRecord('edict', { edict })
+      const normalized = validateEdictInput(boardView(agent), args)
+      const revision = reserveRevision(agent)
+      const contentRevision = (state.edict === null ? 0 : state.edict.revision) + 1
+      const edict = { revision: contentRevision, rev: revision, ...normalized, createdAt: Date.now() }
+      return serializeRecord('edict', { rev: revision, edict })
     },
   })
 
@@ -406,15 +498,19 @@ export function apply(ctx, config = {}) {
           description: 'Workspace-relative path prefixes this department may write. Advisory, not a lock.',
         },
         responsibility: { type: 'string', description: 'One-line responsibility for the roster.' },
+        expected_revision: {
+          type: 'integer',
+          description: 'Board revision read from sansheng_board.',
+        },
       },
-      required: ['member', 'department'],
+      required: ['member', 'department', 'expected_revision'],
     },
     output: textOutput,
     async execute(args, exec) {
       const agent = requireAgent(exec, 'sansheng_appoint')
       const caller = memberOf(agent)
       const state = boardOf(agent)
-      const normalized = validateAppointInput(state, args, caller)
+      const normalized = validateAppointInput(boardView(agent), args, caller)
       const teams = service('agentTeams')
       if (teams !== undefined && typeof teams.listMembers === 'function') {
         let known = []
@@ -432,6 +528,7 @@ export function apply(ctx, config = {}) {
           )
         }
       }
+      const revision = reserveRevision(agent)
       const appointment = {
         id: `ap-${state.appointments.length + 1}`,
         member: normalized.member,
@@ -440,13 +537,13 @@ export function apply(ctx, config = {}) {
         writeScopes: normalized.writeScopes,
         createdAt: Date.now(),
       }
-      return serializeRecord('appoint', { appointment })
+      return serializeRecord('appoint', { rev: revision, appointment })
     },
   })
 
   registerTool({
     name: 'sansheng_gate',
-    description: 'Record one 门下省 review verdict on the plan (`kind: "plan"`) or on the delivery (`kind: "result"`). Must be called by an independent teammate — never the Lead and never a member appointed to a 六部. A rejection must carry blocking defects; the Lead must reopen the affected task and resubmit.',
+    description: 'Record one 门下省 review verdict on the plan (`kind: "plan"`) or on the delivery (`kind: "result"`). Must be called by an independent teammate — never the Lead, never a member appointed to a 六部, never a shared-task owner; plan and result need different reviewers. A pass must cite checked items; a passing result gate needs one reviews entry per completed task. A rejection must carry blocking defects and forces a revised plan or fresh evidence.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -459,48 +556,83 @@ export function apply(ctx, config = {}) {
           description: 'Blocking defects; required when verdict is reject and forbidden when it is pass.',
         },
         summary: { type: 'string', description: 'One-line review statement for the board.' },
+        checked: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'What the reviewer actually checked (acceptance items, evidence records). Required for a passing verdict.',
+        },
+        reviews: {
+          type: 'array',
+          description: 'Per-task result review (required for a passing result gate): one object per completed shared task.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              task_id: { type: 'string', description: 'Completed shared task id, e.g. task-3.' },
+              verdict: { type: 'string', enum: ['pass'], description: 'Per-task verdict; a passing result gate may only contain pass.' },
+            },
+            required: ['task_id', 'verdict'],
+          },
+        },
+        expected_revision: {
+          type: 'integer',
+          description: 'Board revision read from sansheng_board.',
+        },
       },
-      required: ['kind', 'verdict'],
+      required: ['kind', 'verdict', 'expected_revision'],
     },
     output: textOutput,
     async execute(args, exec) {
       const agent = requireAgent(exec, 'sansheng_gate')
       const caller = memberOf(agent)
       const state = boardOf(agent)
-      const normalized = validateGateInput(state, args, caller)
+      const normalized = validateGateInput(boardView(agent), args, caller, tasksOf(agent))
+      const revision = reserveRevision(agent)
       const gate = {
         id: `gate-${state.gates.length + 1}`,
         kind: normalized.kind,
         verdict: normalized.verdict,
         reviewer: caller.name,
         defects: normalized.defects,
+        checked: normalized.checked,
+        reviews: normalized.reviews,
         summary: normalized.summary,
+        rev: revision,
         createdAt: Date.now(),
       }
       // A teammate verdict must reach the Lead session log to become durable
       // board state; its own tool result is recorded in the child session only.
       if (caller.role === 'teammate') {
-        await publishToLead(agent, serializeMessageRecord('gate', { gate }), exec.signal)
+        try {
+          await publishToLead(agent, serializeMessageRecord('gate', { rev: revision, gate }), exec.signal)
+        } catch (error) {
+          releaseRevision(agent, revision)
+          throw error
+        }
       }
-      return serializeRecord('gate', { gate })
+      return serializeRecord('gate', { rev: revision, gate })
     },
   })
 
   registerTool({
     name: 'sansheng_evidence',
-    description: 'Record reproducible evidence from 刑部: the exact command, its exit code, an output digest, a bounded excerpt, and the shared task it covers. The full output stays in the executor\'s own session log; this record only references it. Do not paste large outputs.',
+    description: 'Record reproducible evidence from 刑部 for a completed shared task: task_id, exact command, exit code, hexadecimal output digest, and a bounded excerpt. Duplicate evidence is rejected. The full output stays in the executor\'s own session log; do not paste large outputs.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        task_id: { type: 'string', description: 'Shared task id this evidence covers, e.g. task-3.' },
+        task_id: { type: 'string', description: 'Completed shared task id this evidence covers, e.g. task-3.' },
         command: { type: 'string', description: 'Exact command (or check description) that produces the evidence.' },
         exit_code: { type: 'integer', description: 'Process exit code of the command.' },
-        digest: { type: 'string', description: 'Optional SHA-256 (or similar) digest of the captured output.' },
+        digest: { type: 'string', description: 'Hexadecimal digest of the captured output (16-128 characters).' },
         excerpt: { type: 'string', description: 'Bounded excerpt of the output; the full text remains in the executor session log.' },
         source_session_id: { type: 'string', description: 'Session that holds the full output, when it is not the caller\'s own session.' },
+        expected_revision: {
+          type: 'integer',
+          description: 'Board revision read from sansheng_board.',
+        },
       },
-      required: ['command', 'exit_code'],
+      required: ['task_id', 'command', 'exit_code', 'digest', 'excerpt', 'expected_revision'],
     },
     output: textOutput,
     async execute(args, exec) {
@@ -508,10 +640,9 @@ export function apply(ctx, config = {}) {
       const caller = memberOf(agent)
       const state = boardOf(agent)
       const tasks = tasksOf(agent)
-      const normalized = validateEvidenceInput(state, args, tasks)
-      const excerpt = normalized.excerpt === null
-        ? null
-        : normalized.excerpt.slice(0, settings.maxExcerptChars)
+      const normalized = validateEvidenceInput(boardView(agent), args, tasks)
+      const revision = reserveRevision(agent)
+      const excerpt = normalized.excerpt.slice(0, settings.maxExcerptChars)
       const evidence = {
         id: `ev-${state.evidence.length + 1}`,
         taskId: normalized.taskId,
@@ -521,19 +652,25 @@ export function apply(ctx, config = {}) {
         excerpt,
         submittedBy: caller.name,
         sourceSessionId: normalized.sourceSessionId ?? sessionIdOf(agent),
+        rev: revision,
         createdAt: Date.now(),
       }
       // Same durable path as a teammate verdict: publish it into the Lead log.
       if (caller.role === 'teammate') {
-        await publishToLead(agent, serializeMessageRecord('evidence', { evidence }), exec.signal)
+        try {
+          await publishToLead(agent, serializeMessageRecord('evidence', { rev: revision, evidence }), exec.signal)
+        } catch (error) {
+          releaseRevision(agent, revision)
+          throw error
+        }
       }
-      return serializeRecord('evidence', { evidence })
+      return serializeRecord('evidence', { rev: revision, evidence })
     },
   })
 
   registerTool({
     name: 'sansheng_close',
-    description: 'Close the case (结案) with the five-part report: conclusions, deliverables, evidence, residual unknowns, and next steps. Lead-only. Rejected until both gates passed and every completed shared task has evidence. This is the hard completion gate: do not claim the job is done before it returns.',
+    description: 'Close the case (结案) with the five-part report: conclusions, deliverables, evidence, residual unknowns, and next steps. Lead-only. Rejected until both gates passed, every shared task is completed/deleted, and every completed task has evidence. This is the hard completion gate: do not claim the job is done before it returns.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -558,8 +695,12 @@ export function apply(ctx, config = {}) {
           items: { type: 'string' },
           description: 'Suggested next steps; may be empty.',
         },
+        expected_revision: {
+          type: 'integer',
+          description: 'Board revision read from sansheng_board.',
+        },
       },
-      required: ['conclusions', 'deliverables'],
+      required: ['conclusions', 'deliverables', 'expected_revision'],
     },
     output: textOutput,
     async execute(args, exec) {
@@ -567,7 +708,8 @@ export function apply(ctx, config = {}) {
       const caller = memberOf(agent)
       const state = boardOf(agent)
       const tasks = tasksOf(agent)
-      const normalized = validateCloseInput(state, args, tasks, caller)
+      const normalized = validateCloseInput(boardView(agent), args, tasks, caller)
+      const revision = reserveRevision(agent)
       const closure = {
         id: 'close-1',
         conclusions: normalized.conclusions,
@@ -577,18 +719,18 @@ export function apply(ctx, config = {}) {
         closedBy: caller.name,
         createdAt: Date.now(),
       }
-      return serializeRecord('close', { closure, evidenceCount: state.evidence.length })
+      return serializeRecord('close', { rev: revision, closure, evidenceCount: state.evidence.length })
     },
   })
 
   registerTool({
     name: 'sansheng_board',
-    description: 'Read the compact 三省六部 board: edict, latest plan/result gate verdicts, appointments, evidence count, completed tasks missing evidence, and closure state. Any member may read it.',
+    description: 'Read the compact 三省六部 board: revision (pass it as expected_revision to mutating calls), edict, gate verdicts and rounds, appointments, evidence, per-task reviews, missing evidence, abandoned/closure state. Any member may read it.',
     parameters: { type: 'object', additionalProperties: false, properties: {}, required: [] },
     output: textOutput,
     async execute(_args, exec) {
       const agent = requireAgent(exec, 'sansheng_board')
-      return JSON.stringify(summarizeBoard(boardOf(agent), tasksOf(agent)))
+      return JSON.stringify(summarizeBoard(boardView(agent), tasksOf(agent)))
     },
   })
 }
@@ -606,6 +748,7 @@ function renderPolicy(section, state) {
     section.trim(),
     '',
     'Current board state (folded from the Lead session event log):',
+    `- board revision: ${state.revision} (pass this as expected_revision on mutating calls)`,
     `- edict: ${state.edict === null
       ? 'not drafted yet'
       : `revision ${state.edict.revision}, tier ${state.edict.tier}, roster_cap ${state.edict.rosterCap}`}`,
@@ -614,6 +757,7 @@ function renderPolicy(section, state) {
     `- evidence records: ${state.evidence.length}`,
     `- result gate: ${result === undefined ? 'pending' : `${result.verdict} by ${result.reviewer}`}`,
     `- closure: ${state.closure === null ? 'open' : `closed by ${state.closure.closedBy}`}`,
+    `- abandoned: ${state.abandoned === null ? 'no' : `yes (${state.abandoned.reason})`}`,
   ]
   return lines.join('\n')
 }

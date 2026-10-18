@@ -4,6 +4,31 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-10-18
+
+### Breaking
+
+- Every mutating tool now requires `expected_revision` (read it from
+  `sansheng_board`); stale writes fail with `STALE_REVISION` instead of
+  forking the board or letting a late verdict win. Records carry their
+  reserved revision and replay ignores stale duplicates.
+- `sansheng_mode leave` on an open case now requires `abandon_reason`; leaving
+  is recorded on the board as an abandonment.
+- `sansheng_close` now rejects unfinished shared tasks (`OPEN_TASKS`), not just
+  completed tasks without evidence.
+- A passing gate must cite `checked` items; a passing result gate must carry
+  one `reviews` entry per completed shared task, reviewed by a teammate who is
+  neither the plan reviewer nor any task owner.
+- A 封驳 plan must be re-drafted before it can pass again; a 封驳 result needs
+  new evidence after the rejection.
+- `sansheng_evidence` requires `task_id` on a completed shared task plus a
+  hexadecimal `digest` and an `excerpt`; duplicate evidence is rejected.
+
+### Added
+
+- Board summary exposes `revision`, `abandoned`, `planRounds`, `resultRounds`
+  and `taskReviews`; the panel shows the revision and an abandonment warning.
+
 ## [0.1.2] — 2026-10-18
 
 ### Added
