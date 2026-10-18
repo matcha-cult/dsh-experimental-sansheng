@@ -4,6 +4,18 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-10-19
+
+### Added
+
+- **Detailed case history** (`sanshengHistory` projection + 详细历史 tab): folds
+  the Lead session's user/assistant text, tool calls, tool results and teammate
+  inbox deliveries into a bounded chronological log. The assistant's reasoning
+  is deliberately excluded. Entries are filterable (全部/消息/工具/团队/治理/错误)
+  and expand to show the tool arguments or result excerpt. No custom session
+  event is appended, so restart/fork/compaction rebuild the same history; the
+  newest 240 entries / 120k characters are retained.
+
 ## [0.3.1] — 2026-10-18
 
 ### Added

@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
 			".dss-chip b{font-weight:600;color:var(--dsw-alias-label-primary)}",
 			".dss-close{background:0 0;border:0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:20px;line-height:1;padding:2px 6px;border-radius:6px}",
 			".dss-close:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2,#2a2b30)}",
-			".dss-tabs{display:flex;gap:2px;padding:6px 12px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3b40);flex-wrap:wrap}",
+			".dss-tabs{flex-wrap:wrap}display:flex;gap:2px;padding:6px 12px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3b40);flex-wrap:wrap}",
 			".dss-tab{background:0 0;border:0;border-bottom:2px solid transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:6px 10px;font-size:12px}",
 			".dss-tab:hover{color:var(--dsw-alias-label-primary)}",
 			".dss-tab-on{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-business-primary,#4c8dff)}",
@@ -86,6 +86,18 @@ window.__ModuleLoader__.load({
 			".dss-error{margin:0 0 8px;padding:7px 9px;border-radius:7px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#f85149) 14%,transparent);color:var(--dsw-alias-state-error-primary,#f85149);font-size:11px}",
 			".dss-member{display:flex;align-items:center;gap:8px;border:.5px solid var(--dsw-alias-border-l2,#3a3b40);background:var(--dsw-alias-bg-layer-2,#242529);border-radius:8px;padding:8px 10px;margin-bottom:7px}",
 			".dss-member-main{display:flex;flex-direction:column;min-width:0;flex:1;gap:1px}",
+			".dss-history-filters{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}",
+			".dss-history-chip{background:0 0;border:.5px solid var(--dsw-alias-border-l2,#3a3b40);border-radius:11px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:11px;padding:2px 8px}",
+			".dss-history-chip[aria-pressed=true]{border-color:var(--dsw-alias-state-business-primary,#4c8dff);color:var(--dsw-alias-state-business-primary,#4c8dff)}",
+			".dss-history-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}",
+			".dss-history-item{border-bottom:.5px solid var(--dsw-alias-border-l1,#2f3033);padding:6px 0}",
+			".dss-history-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap}",
+			".dss-history-title{font-size:12px;font-weight:500;overflow-wrap:anywhere}",
+			".dss-history-item details{margin-top:2px}",
+			".dss-history-item summary{color:var(--dsw-alias-label-caption);cursor:pointer;font-size:11px;list-style:none}",
+			".dss-history-item summary::-webkit-details-marker{display:none}",
+			".dss-history-item summary:hover{color:var(--dsw-alias-label-secondary)}",
+			".dss-history-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--dsw-alias-bg-layer-2,#242529);border-radius:6px;color:var(--dsw-alias-label-secondary);font-family:var(--dsw-font-mono,monospace);font-size:11px;line-height:1.5;margin:4px 0 0;max-height:260px;overflow:auto;padding:7px 8px}",
 			".dss-kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 10px;margin-top:4px}",
 			".dss-kv dt{color:var(--dsw-alias-label-tertiary);font-size:11px}",
 			".dss-kv dd{margin:0;word-break:break-word}",
@@ -227,6 +239,14 @@ window.__ModuleLoader__.load({
 					: null,
 			);
 		}
+
+		const HISTORY_KINDS = {
+			user: "消息",
+			assistant: "回复",
+			inbox: "来信",
+			"tool-call": "调用",
+			"tool-result": "结果",
+		};
 
 		function EdictCard(props) {
 			const { edict } = props;
@@ -553,6 +573,60 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function HistoryTab(props) {
+			const { detail } = props;
+			const [filter, setFilter] = react.useState("all");
+			const entries = detail !== undefined && detail !== null && Array.isArray(detail.entries) ? detail.entries : [];
+			const TASK_TOOLS = /^(spawn_teammate|send_message|list_agents|wait_agent|interrupt_agent|team_task_)/;
+			const inFilter = (entry) => {
+				if (filter === "all") return true;
+				if (filter === "messages") return entry.kind === "user" || entry.kind === "assistant" || entry.kind === "inbox";
+				if (filter === "tools") return entry.kind === "tool-call" || entry.kind === "tool-result";
+				if (filter === "team") return (entry.kind === "tool-call" || entry.kind === "tool-result") && TASK_TOOLS.test(String(entry.tool ?? ""));
+				if (filter === "governance") return (entry.kind === "tool-call" || entry.kind === "tool-result") && String(entry.tool ?? "").startsWith("sansheng_");
+				if (filter === "errors") return entry.isError === true;
+				return true;
+			};
+			const visible = entries.filter(inFilter).slice().reverse();
+			const filters = [
+				["all", "全部"],
+				["messages", "消息"],
+				["tools", "工具"],
+				["team", "团队"],
+				["governance", "治理"],
+				["errors", "错误"],
+			];
+			return h(
+				"div",
+				null,
+				h("p", { className: "dss-muted", style: { marginTop: 0 } }, "案卷详细历史：只记录消息正文、工具名/参数/结果，不含模型思考；较早条目会自动截断。"),
+				h("div", { className: "dss-history-filters" }, filters.map(([id, label]) => h("button", {
+					key: id,
+					className: "dss-history-chip",
+					"aria-pressed": filter === id,
+					onClick: () => setFilter(id),
+				}, label))),
+				detail !== undefined && detail !== null && detail.dropped > 0
+					? h("p", { className: "dss-muted" }, "仅保留最近 " + String(entries.length) + " 条，较早的 " + String(detail.dropped) + " 条已省略。")
+					: null,
+				visible.length === 0
+					? h("p", { className: "dss-empty" }, "尚无详细历史。")
+					: h("ul", { className: "dss-history-list" }, visible.map((entry) => h(
+						"li",
+						{ className: "dss-history-item", key: entry.id },
+						h("div", { className: "dss-history-head" },
+							h("span", { className: "dss-event-time" }, fmtTime(entry.at)),
+							h("span", { className: "dss-badge " + (entry.kind === "tool-result" ? (entry.isError ? "dss-badge-reject" : "dss-badge-pass") : "dss-badge-pending") }, HISTORY_KINDS[entry.kind] ?? entry.kind),
+							h("span", { className: "dss-history-title" }, String(entry.title ?? "")),
+						),
+						h("details", null,
+							h("summary", null, "展开详情"),
+							h("pre", { className: "dss-history-pre" }, String(entry.detail ?? "")),
+						),
+					))),
+			);
+		}
+
 		function TimelineTab(props) {
 			const { board } = props;
 			const history = Array.isArray(board.history) ? board.history.slice().reverse() : [];
@@ -572,7 +646,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function SanshengPanel(props) {
-			const { board, team, onClose, sessionId, useSessions, openTeammate } = props;
+			const { board, team, detail, onClose, sessionId, useSessions, openTeammate } = props;
 			const [tab, setTab] = react.useState("overview");
 			const [error, setError] = react.useState(null);
 			const tabs = [
@@ -582,6 +656,7 @@ window.__ModuleLoader__.load({
 				["gates", "审议"],
 				["evidence", "证据"],
 				["timeline", "时间线"],
+				["history", "详细历史"],
 			];
 			const openMember = (memberId) => {
 				try {
@@ -597,6 +672,7 @@ window.__ModuleLoader__.load({
 				if (tab === "gates") return h(GatesTab, { board });
 				if (tab === "evidence") return h(EvidenceTab, { board });
 				if (tab === "timeline") return h(TimelineTab, { board });
+				if (tab === "history") return h(HistoryTab, { detail });
 				return h(OverviewTab, { board, team });
 			};
 			return h(
@@ -651,6 +727,9 @@ window.__ModuleLoader__.load({
 			const team = useSessions(
 				(state) => state?.projectionsBySession?.[leadSessionId]?.values?.agentTeam,
 			);
+			const detail = useSessions(
+				(state) => state?.projectionsBySession?.[leadSessionId]?.values?.sanshengHistory,
+			);
 
 			const isLeadView = parentId === undefined || parentId === null;
 			react.useEffect(() => {
@@ -695,7 +774,7 @@ window.__ModuleLoader__.load({
 					h("span", null, "三省六部"),
 					h("span", { className: "dss-count" }, String(board.appointments.length)),
 				),
-				open ? h(SanshengPanel, { board, team, onClose: () => setOpen(false), sessionId, useSessions, openTeammate }) : null,
+				open ? h(SanshengPanel, { board, team, detail, onClose: () => setOpen(false), sessionId, useSessions, openTeammate }) : null,
 			);
 		}
 

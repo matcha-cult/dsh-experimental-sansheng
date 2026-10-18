@@ -41,6 +41,7 @@ import {
   validateGateInput,
   validateModeAction,
 } from './src/policy.js'
+import { createHistoryState, foldHistoryEvent } from './src/history.js'
 
 /** Cordis plugin name. */
 export const name = 'sansheng'
@@ -342,6 +343,26 @@ export function apply(ctx, config = {}) {
     })
   }
 
+  /**
+   * @returns {object} zod schema for the detailed history projection.
+   */
+  const historySchema = zod.object({
+    entries: zod.array(zod.object({
+      id: zod.string(),
+      seq: zod.number(),
+      at: zod.number().nullable(),
+      kind: zod.string(),
+      title: zod.string(),
+      detail: zod.string(),
+      tool: zod.string().optional(),
+      callId: zod.string().optional(),
+      isError: zod.boolean().optional(),
+    })),
+    dropped: zod.number(),
+    totalChars: zod.number(),
+    updatedAt: zod.number().nullable(),
+  })
+
   /* ---------------------------------------------------------------- */
   /* Session projection: the browser board reads this                  */
   /* ---------------------------------------------------------------- */
@@ -358,6 +379,18 @@ export function apply(ctx, config = {}) {
       view: (state) => state,
     },
   }), 'sansheng: board projection')
+
+  ctx.effect(() => ctx.sessionProjections.register({
+    key: 'sanshengHistory',
+    stateVersion: 1,
+    stateSchema: historySchema,
+    init: () => createHistoryState(),
+    apply: (state, event) => foldHistoryEvent(state, event),
+    wire: {
+      viewSchema: historySchema,
+      view: (state) => state,
+    },
+  }), 'sansheng: detailed history projection')
 
   /* ---------------------------------------------------------------- */
   /* Prompt section: only contributes while the mode is active         */

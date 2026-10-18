@@ -31,6 +31,7 @@ function harness({ teammates = [], tasks = [], agentPreset } = {}) {
   let projection
   const tools = []
   const sections = []
+  const projections = {}
   const membership = new Map()
   membership.set(leader, { role: 'lead', name: 'lead', root: leader })
 
@@ -86,12 +87,15 @@ function harness({ teammates = [], tasks = [], agentPreset } = {}) {
     },
     sessionProjections: {
       register(definition) {
-        projection = definition
+        projections[definition.key] = definition
+        if (definition.key === 'sansheng') projection = definition
         return () => {}
       },
       stateOf(target, key) {
-        if (key !== 'sansheng' || target?.events === undefined) return undefined
-        return target.events.reduce((state, event) => projection.apply(state, event), projection.init(target.header))
+        if (target?.events === undefined) return undefined
+        const definition = projections[key]
+        if (definition === undefined) return undefined
+        return target.events.reduce((state, event) => definition.apply(state, event), definition.init(target.header))
       },
     },
   }

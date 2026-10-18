@@ -99,7 +99,7 @@ Hard invariants since 0.2.0: stale revisions are rejected; a rejected plan must 
 
 Since 0.2.2: large-tier appointments need a real user `/sansheng approve` recorded after the plan gate (a model claim is not enough); `/sansheng reject` blocks dispatch until the plan is revised and re-reviewed. Board alerts escalate a stalled board at 30 / 60 / 120 minutes (inspect → interrupt/reassign or report → user decides).
 
-Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The board's 成员 tab and each task card's 负责人轨迹 button open the member's native DSH session, where the original Chat / Trajectory view is available; the board never copies trajectories. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
+Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The board's 详细历史 tab keeps a bounded case-level log of message text, tool arguments/results and teammate inbox deliveries, filterable and expandable, with assistant reasoning deliberately excluded; the 成员 tab and each task card's 负责人轨迹 button open the member's native DSH session, where the original Chat / Trajectory view is available; the board never copies trajectories. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
 
 ## Tools
 
