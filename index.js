@@ -460,7 +460,7 @@ export function apply(ctx, config = {}) {
         return JSON.stringify(summarizeBoard(boardView(agent), tasksOf(agent)))
       }
       if (caller.role !== 'lead') {
-        throw new SanshengError('LEAD_ONLY', 'only the Lead (政事堂) may enter or leave 三省六部 mode')
+        throw new SanshengError('LEAD_ONLY', 'only the Lead may enter or leave 三省六部 mode')
       }
       const state = boardOf(agent)
       const normalized = validateModeAction(boardView(agent), args)
@@ -538,7 +538,7 @@ export function apply(ctx, config = {}) {
     async execute(args, exec) {
       const agent = requireAgent(exec, 'sansheng_edict')
       const caller = memberOf(agent)
-      if (caller.role !== 'lead') throw new SanshengError('LEAD_ONLY', 'only the Lead (政事堂) drafts the edict')
+      if (caller.role !== 'lead') throw new SanshengError('LEAD_ONLY', 'only the Lead (中书省) drafts the edict')
       const state = boardOf(agent)
       const normalized = validateEdictInput(boardView(agent), args)
       const revision = reserveRevision(agent)
@@ -829,12 +829,12 @@ export function apply(ctx, config = {}) {
         && caller.leadSession.header.id === agent?.session?.header?.id
       if (verb === 'status' || verb === undefined) {
         if (isLeadSession) return { kind: 'success', text: JSON.stringify(summarizeBoard(boardView(agent), tasksOf(agent))) }
-        return { kind: 'success', text: '用法：/sansheng approve [备注] | /sansheng reject [备注] | /sansheng status（在政事堂会话中查看）' }
+        return { kind: 'success', text: '用法：/sansheng approve [备注] | /sansheng reject [备注] | /sansheng status（在 Lead 会话中查看）' }
       }
       if (verb !== 'approve' && verb !== 'reject') {
         return { kind: 'error', text: '用法：/sansheng approve [备注] | /sansheng reject [备注] | /sansheng status' }
       }
-      if (!isLeadSession) return { kind: 'error', text: '御批只能在政事堂（Lead）会话中进行' }
+      if (!isLeadSession) return { kind: 'error', text: '御批只能在 Lead 会话中进行' }
       const state = boardOf(agent)
       if (state.active !== true) return { kind: 'error', text: '三省六部模式未激活' }
       if (state.closure !== null) return { kind: 'error', text: '案件已结案，不能再御批' }

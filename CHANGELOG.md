@@ -4,6 +4,18 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.4] — 2026-10-19
+
+### Changed
+
+- Aligned role labels with the historical 三省制: the Lead wears the
+  **中书省** (receive the intent, plan, draft) and **尚书省** (dispatch,
+  coordinate, summarize) hats; **门下省** stays an independent reviewer.
+  政事堂 is documented as the Lead's coordinating seat, not a fourth department.
+  Updated the runtime guidance, preset description/persona, board section
+  headers (制敕 · 中书省 / 派发 · 尚书省 / 结案 · 尚书省汇总) and README prose.
+  No gate or tool-contract change.
+
 ## [0.4.3] — 2026-10-19
 
 ### Removed

@@ -70,12 +70,14 @@ export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù B
 Every mutating tool takes expected_revision (the revision you last read from sansheng_board). A stale value is rejected — read the board again, do not guess. Every committed step increments the board revision.
 
 Procedure (all state is recorded in this session's event log — never coordinate through files or temp directories):
-1. 政事堂 (Lead) drafts the edict: sansheng_edict {goal, acceptance, boundaries, tier, roster_cap, departments}.
+The Lead wears two hats: 中书省 (receiving the emperor's intent and drafting the plan) and 尚书省 (dispatching after the gates and summarizing at close). 门下省 is an independent teammate; 政事堂 is the Lead's coordinating seat, not a fourth department.
+
+1. 中书省 (Lead, drafting hat) receives the intent and drafts the edict: sansheng_edict {goal, acceptance, boundaries, tier, roster_cap, departments}.
 2. 门下省 reviews the plan: an independent teammate calls sansheng_gate {kind: "plan", verdict, checked}. The Lead can never approve its own plan; a pass must cite at least one checked item. A reject must carry defects; after a reject, revise the edict before a new plan review.
-3. Only after the plan gate passes: sansheng_appoint each teammate to one of the 六部, then create team tasks and spawn teammates.
+3. Only after the plan gate passes: 尚书省 (Lead, dispatch hat) uses sansheng_appoint for each teammate to one of the 六部, then creates team tasks and spawns teammates.
 4. 六部 execute. 刑部 submits evidence for a completed shared task: sansheng_evidence {task_id, command, exit_code, digest, excerpt}. A digest (hex) and a bounded excerpt are required.
 5. 门下省 reviews the result: a different teammate (never the plan reviewer, never a task owner) calls sansheng_gate {kind: "result", verdict, checked, reviews}. For a pass, reviews must cover every completed shared task with verdict "pass".
-6. Only after both gates pass, every shared task is completed or deleted, and every completed task has evidence, the Lead calls sansheng_close and reports the result.
+6. Only after both gates pass, every shared task is completed or deleted, and every completed task has evidence, 尚书省 (Lead, summary hat) calls sansheng_close and reports the result.
 
 Leaving the mode requires a closed case or an explicit abandon_reason; abandoning is recorded on the board. Closing with unfinished shared tasks is rejected. Never claim completion before sansheng_close returns. Use sansheng_board for the current board state and revision.`
 
@@ -773,7 +775,7 @@ export function validateEdictInput(state, input) {
 export function validateAppointInput(state, input, caller) {
   assertExpectedRevision(state, input)
   assertActive(state)
-  if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (政事堂) may appoint 六部')
+  if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (尚书省) may appoint 六部')
   const planGate = validPlanGate(state)
   if (planGate === undefined) {
     fail('PLAN_GATE_NOT_PASSED', 'the 门下省 plan gate must pass after the current edict revision before 尚书省 dispatches the 六部')
@@ -792,7 +794,7 @@ export function validateAppointInput(state, input, caller) {
     fail('SMALL_TIER_NEEDS_NO_TEAM', 'small tier runs without teammates; do not appoint 六部')
   }
   const member = requiredString(input?.member, 'member', 120)
-  if (member === 'lead') fail('CANNOT_APPOINT_LEAD', 'the Lead is 政事堂 itself and cannot be appointed to a 部')
+  if (member === 'lead') fail('CANNOT_APPOINT_LEAD', 'the Lead cannot be appointed to a 部')
   const department = requiredString(input?.department, 'department', 40)
   if (!DEPARTMENT_NAMES.includes(department)) {
     fail('UNKNOWN_DEPARTMENT', `department must be one of: ${DEPARTMENT_NAMES.join(', ')}`)
@@ -877,7 +879,7 @@ export function validateGateInput(state, input, caller, tasks = []) {
   assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'teammate') {
-    fail('REVIEWER_MUST_BE_TEAMMATE', 'the reviewer must be an independent teammate; the Lead (and 政事堂) can never approve its own work')
+    fail('REVIEWER_MUST_BE_TEAMMATE', 'the reviewer must be an independent teammate; the Lead can never approve its own work')
   }
   const kind = input?.kind
   if (!GATE_KINDS.includes(kind)) fail('INVALID_GATE_KIND', 'kind must be "plan" or "result"')
@@ -983,7 +985,7 @@ export function validateEvidenceInput(state, input, tasks = []) {
 export function validateCloseInput(state, input, tasks, caller) {
   assertExpectedRevision(state, input)
   assertActive(state)
-  if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (政事堂) may close the case')
+  if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (尚书省) may close the case')
   if (validPlanGate(state) === undefined) {
     fail('PLAN_GATE_NOT_PASSED', 'cannot close before the 门下省 plan gate passes after the current edict revision')
   }

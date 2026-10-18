@@ -12,8 +12,8 @@ core host row itself, and adds the preset declaration. A profile that also
 enables the core bundle's own row keeps working (the loader resolves the
 duplicate id/name to the same row).
 
-The preset reuses the shipped Standard child-plugin catalog with a 政事堂
-persona. Selecting it starts the session already in the 三省六部 mode; the core
+The preset reuses the shipped Standard child-plugin catalog with a Lead
+persona wearing the 中书省 (planning) and 尚书省 (dispatch/summary) hats. Selecting it starts the session already in the 三省六部 mode; the core
 bundle also supports manual entry with `sansheng_mode {action:"enter"}`.
 
 The preset plugin list mirrors the host Standard preset: re-sync

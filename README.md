@@ -82,7 +82,7 @@ dsh plugin --profile web add dsh-experimental-sansheng-profile
 dsh plugin --profile web add dsh-experimental-sansheng
 ```
 
-预设卡复用宿主 Standard 的子插件清单，外加政事堂 persona。选中它创建会话，该会话**从第一轮起就处于三省六部模式**，不需要手动进入；已有 Standard 会话不受影响。没有预设选择器的宿主（例如 headless profile）只挂载核心行，入口退化为 `sansheng_mode`。
+预设卡复用宿主 Standard 的子插件清单，外加一个戴「中书省（规划）/ 尚书省（派发汇总）」两顶帽子的 Lead persona。选中它创建会话，该会话**从第一轮起就处于三省六部模式**，不需要手动进入；已有 Standard 会话不受影响。没有预设选择器的宿主（例如 headless profile）只挂载核心行，入口退化为 `sansheng_mode`。
 
 > 预设声明为什么单独一个包：bundle 的 loader 行要指向一个**不含浏览器半边**的包，才能避开 client-modules 对同一包出现多个来源的冲突；核心包的 `dsh.client` 与第二行不能同包共存。
 
@@ -110,32 +110,35 @@ dsh plugin --profile web add dsh-experimental-sansheng
 
 核心是**决策、复核、执行分离**，再用工具门把“自觉”变成“拒绝”：
 
-- **政事堂（Lead）**：拟旨、派工、结案；不能自审，也不能替六部执行；
+- **中书省（Lead 拟旨阶段）**：接旨、规划、拆解，产出制敕；不能自审；
 - **门下省（独立 teammate）**：审计划、审成果；必须换人复审，且不能是任务执行者；
+- **尚书省（Lead 派发阶段）**：任命六部、建共享任务、协调进度、汇总回奏；
 - **六部**：按部门执行；**刑部**登记可复现证据，没有证据的完成项不能结案；
 - 所有写操作都带 `expected_revision`，迟到的评审会被 `STALE_REVISION` 拒绝，不会覆盖新结论。
+
+> **政事堂不是第四省**：它是 Lead 的协调位。同一位 Lead 在“中书省（拟旨）→ 尚书省（派发/汇总）”之间切换帽子；真正独立的是门下省。
 
 ```mermaid
 flowchart TD
     U(["皇上 / 用户"]) --> ENTRY{"入口"}
-    ENTRY -->|"新任务选「三省六部」预设"| LEAD["政事堂 · Lead"]
-    ENTRY -->|"已有会话：sansheng_mode enter"| LEAD
-    LEAD -->|"sansheng_edict<br/>目标 · 验收 · 档位 · 编制 · 部门 · workstreams"| EDICT[["制敕已立"]]
+    ENTRY -->|"新任务选「三省六部」预设"| ZS["中书省 · Lead 接旨拟旨"]
+    ENTRY -->|"已有会话：sansheng_mode enter"| ZS
+    ZS -->|"sansheng_edict<br/>目标 · 验收 · 档位 · 编制 · 部门 · workstreams"| EDICT[["制敕已立"]]
     EDICT -->|"spawn_teammate / send_message"| REVIEW["门下省 · 独立评审"]
     REVIEW -->|"sansheng_gate kind=plan"| PG{"计划门"}
     PG -->|"reject · 封驳 + defects"| EDICT
     PG -->|"pass"| LARGE{"tier = large?"}
     LARGE -->|"是"| HUMAN{"用户 /sansheng approve"}
     HUMAN -->|"reject"| EDICT
-    HUMAN -->|"approve"| DISPATCH["尚书省 · 派工<br/>sansheng_appoint · team_task_create"]
-    LARGE -->|"否"| DISPATCH
-    DISPATCH --> EXEC["六部执行<br/>team_task_* · 文件改动"]
+    HUMAN -->|"approve"| SS["尚书省 · Lead 派发<br/>sansheng_appoint · team_task_create"]
+    LARGE -->|"否"| SS
+    SS --> EXEC["六部执行<br/>team_task_* · 文件改动"]
     EXEC -->|"任务 completed"| EVID["刑部 · sansheng_evidence<br/>command · exit_code · digest · excerpt · workstream_id"]
     EVID --> RG{"成果门"}
     RG -->|"reject · 补新证据"| EXEC
-    RG -->|"pass · 另一评审者 + 逐任务 reviews"| CLOSE["政事堂 · sansheng_close"]
+    RG -->|"pass · 另一评审者 + 逐任务 reviews"| CLOSE["尚书省 · Lead 汇总回奏<br/>sansheng_close"]
     CLOSE --> DONE(["回奏皇上 · 结案"])
-    LEAD -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["显式放弃"])
+    ZS -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["显式放弃"])
 ```
 
 > 计划被封驳 → 改旨重审；成果被封驳 → 补新证据再审。large 档必须由用户 `/sansheng approve` 后才能派工；离开模式必须先结案或显式放弃。

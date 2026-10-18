@@ -251,7 +251,7 @@ window.__ModuleLoader__.load({
 		function EdictCard(props) {
 			const { edict } = props;
 			if (edict === null) {
-				return h("div", { className: "dss-card dss-empty" }, "尚未拟旨：政事堂需要用 sansheng_edict 定目标与验收。");
+				return h("div", { className: "dss-card dss-empty" }, "尚未拟旨：中书省（Lead）需要用 sansheng_edict 定目标与验收。");
 			}
 			return h(
 				"div",
@@ -384,9 +384,9 @@ window.__ModuleLoader__.load({
 				),
 				h("div", { className: "dss-grid" },
 					h("div", null,
-						h("div", { className: "dss-section" }, h("h4", null, "制敕 · 政事堂"), h(EdictCard, { edict: board.edict })),
+						h("div", { className: "dss-section" }, h("h4", null, "制敕 · 中书省"), h(EdictCard, { edict: board.edict })),
 						h(Workstreams, { board }),
-						h("div", { className: "dss-section" }, h("h4", null, "编制 · 六部"), h(Appointments, { board })),
+						h("div", { className: "dss-section" }, h("h4", null, "派发 · 尚书省"), h(Appointments, { board })),
 					),
 					h("div", null,
 						h("div", { className: "dss-section" }, h("h4", null, "计划门 · 门下省"), h(GateSection, { title: "第 " + String(board.planRounds ?? 1) + " 轮", gate: plan })),
@@ -394,7 +394,7 @@ window.__ModuleLoader__.load({
 					),
 				),
 				h(Warnings, { board, team }),
-				h("div", { className: "dss-section" }, h("h4", null, "结案 · 回奏"), h(ClosureSummary, { board })),
+				h("div", { className: "dss-section" }, h("h4", null, "结案 · 尚书省汇总"), h(ClosureSummary, { board })),
 			);
 		}
 

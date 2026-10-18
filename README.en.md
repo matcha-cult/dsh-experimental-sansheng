@@ -63,7 +63,7 @@ dsh plugin --profile web add dsh-experimental-sansheng-profile
 dsh plugin --profile web add dsh-experimental-sansheng
 ```
 
-The preset reuses the host's Standard child-plugin catalog with a 政事堂 persona. Selecting it starts the session already in the mode; existing Standard sessions are unaffected. Hosts without a preset selector (for example the headless profile) mount only the core row and keep the `sansheng_mode` entry point.
+The preset reuses the host's Standard child-plugin catalog with a Lead persona wearing two hats: 中书省 (planning) and 尚书省 (dispatch/summary). Selecting it starts the session already in the mode; existing Standard sessions are unaffected. Hosts without a preset selector (for example the headless profile) mount only the core row and keep the `sansheng_mode` entry point.
 
 > Why a second package: the preset's loader row must live in a package without a browser half. A package that declares `dsh.client` cannot also carry a second loader row — client-modules rejects one package resolving from two active sources. The companion bundles the declaration only; it is not a browser plugin.
 
@@ -91,32 +91,35 @@ Every mutating call echoes the `revision` last read from `sansheng_board` as `ex
 
 The mode separates **decision, review and execution**, then turns good intentions into tool-enforced gates:
 
-- **政事堂 (Lead)**: drafts the edict, dispatches, closes; cannot review itself and does not execute ministry work;
+- **中书省 (Lead, drafting hat)**: receives the intent, plans and drafts the edict; cannot review itself;
 - **门下省 (independent teammate)**: reviews the plan and the result; the result reviewer must differ from the plan reviewer and may not own a task;
+- **尚书省 (Lead, dispatch hat)**: appoints the ministries, creates shared tasks, coordinates, and summarizes at close;
 - **六部**: execute by department; **刑部** records reproducible evidence, and a completed task without evidence cannot close;
 - every mutation carries `expected_revision`; a late verdict fails with `STALE_REVISION` instead of overwriting a newer decision.
+
+> **政事堂 is not a fourth department**: it is the Lead's coordinating seat. The same Lead switches hats between 中书省 (drafting) and 尚书省 (dispatch/summary); 门下省 is the genuinely independent reviewer.
 
 ```mermaid
 flowchart TD
     U(["User / 皇上"]) --> ENTRY{"Entry"}
-    ENTRY -->|"New task: 三省六部 preset"| LEAD["政事堂 · Lead"]
-    ENTRY -->|"Existing session: sansheng_mode enter"| LEAD
-    LEAD -->|"sansheng_edict<br/>goal · acceptance · tier · roster · departments · workstreams"| EDICT[["Edict drafted"]]
+    ENTRY -->|"New task: 三省六部 preset"| ZS["中书省 · Lead drafting"]
+    ENTRY -->|"Existing session: sansheng_mode enter"| ZS
+    ZS -->|"sansheng_edict<br/>goal · acceptance · tier · roster · departments · workstreams"| EDICT[["Edict drafted"]]
     EDICT -->|"spawn_teammate / send_message"| REVIEW["门下省 · independent reviewer"]
     REVIEW -->|"sansheng_gate kind=plan"| PG{"Plan gate"}
     PG -->|"reject · defects"| EDICT
     PG -->|"pass"| LARGE{"tier = large?"}
     LARGE -->|"yes"| HUMAN{"User /sansheng approve"}
     HUMAN -->|"reject"| EDICT
-    HUMAN -->|"approve"| DISPATCH["尚书省 · dispatch<br/>sansheng_appoint · team_task_create"]
-    LARGE -->|"no"| DISPATCH
-    DISPATCH --> EXEC["六部 execute<br/>team_task_* · file changes"]
+    HUMAN -->|"approve"| SS["尚书省 · Lead dispatch<br/>sansheng_appoint · team_task_create"]
+    LARGE -->|"no"| SS
+    SS --> EXEC["六部 execute<br/>team_task_* · file changes"]
     EXEC -->|"task completed"| EVID["刑部 · sansheng_evidence<br/>command · exit_code · digest · excerpt · workstream_id"]
     EVID --> RG{"Result gate"}
     RG -->|"reject · new evidence"| EXEC
-    RG -->|"pass · different reviewer + per-task reviews"| CLOSE["政事堂 · sansheng_close"]
+    RG -->|"pass · different reviewer + per-task reviews"| CLOSE["尚书省 · Lead summary<br/>sansheng_close"]
     CLOSE --> DONE(["Report to 皇上 · closed"])
-    LEAD -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["Abandon explicitly"])
+    ZS -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["Abandon explicitly"])
 ```
 
 > A rejected plan must be re-drafted; a rejected result needs fresh evidence. Large-tier work needs a real user `/sansheng approve` before dispatch. Leaving an open case requires closing it or an explicit `abandon_reason`.

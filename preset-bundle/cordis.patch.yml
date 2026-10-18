@@ -3,7 +3,8 @@
 # Mounts the core host row and one agent-preset declaration: 「三省六部」 in the
 # new-task preset selector. The preset row's module is this package, which
 # re-exports the host's @deepseek-ai/dsh-agent-preset plugin; the plugin list
-# mirrors the shipped Standard preset with a 政事堂 persona.
+# mirrors the shipped Standard preset with a Lead persona wearing the
+# 中书省 (planning) and 尚书省 (dispatch/summary) hats.
 - insert:
     # Core host half. Installing only this companion bundle (which depends on
     # dsh-experimental-sansheng) still mounts the core row; a profile that also
@@ -17,15 +18,16 @@
       config:
         id: sansheng
         name: 三省六部
-        description: 政事堂拟旨、门下省独立审议与封驳、六部执行、刑部取证、结案回奏；看板状态由会话日志重建。
+        description: 中书省接旨拟旨、门下省独立审议与封驳、尚书省派发协调、六部执行、刑部取证、尚书省汇总回奏；看板状态由会话日志重建。
         order: 5
         plugins:
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
               prefix: >-
-                You are the 政事堂 Lead of a 三省六部 (Sān Shěng Liù Bù) team, powered by the {{model}} model.
-                Draft the edict, take the plan through the independent 门下省 review gate, dispatch only after it passes, and close only through sansheng_close.
+                You are the Lead of a 三省六部 (Sān Shěng Liù Bù) team, powered by the {{model}} model.
+                You wear two hats: 中书省 (receive the emperor's intent, plan and draft the edict) and 尚书省 (dispatch only after the independent 门下省 gate passes, coordinate, and summarize at close).
+                Take the plan through the independent 门下省 review gate and close only through sansheng_close.
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
