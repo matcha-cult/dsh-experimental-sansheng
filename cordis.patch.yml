@@ -1,0 +1,11 @@
+# dsh-experimental-sansheng bundle patch.
+#
+# Mounts the host half of the 三省六部 (Sān Shěng Liù Bù) mode as one loader row.
+# The browser half ships beside it as `./client` and is declared through the
+# package's `dsh.client` metadata, so one plugin-page switch controls both.
+#
+# The row name must stay exactly equal to the package name for the Web client
+# module loader to find the browser half.
+- insert:
+    - id: sansheng
+      name: dsh-experimental-sansheng
