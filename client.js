@@ -719,7 +719,9 @@ window.__ModuleLoader__.load({
 			const { sessionId, useSession, useSessions, openTeammate } = props;
 			const [open, setOpen] = react.useState(false);
 			const previousActive = react.useRef(false);
+			const snapshotSessionId = useSession((snapshot) => snapshot?.sessionId);
 			const parentId = useSession((snapshot) => snapshot?.subagent?.address?.parentSessionId);
+			const sessionReady = snapshotSessionId === sessionId;
 			const leadSessionId = parentId ?? sessionId;
 			const board = useSessions(
 				(state) => state?.projectionsBySession?.[leadSessionId]?.values?.sansheng,
@@ -731,7 +733,7 @@ window.__ModuleLoader__.load({
 				(state) => state?.projectionsBySession?.[leadSessionId]?.values?.sanshengHistory,
 			);
 
-			const isLeadView = parentId === undefined || parentId === null;
+			const isLeadView = sessionReady && (parentId === undefined || parentId === null);
 			react.useEffect(() => {
 				const active = board !== undefined && board !== null && board.active === true;
 				if (isLeadView && active && previousActive.current === false) setOpen(true);

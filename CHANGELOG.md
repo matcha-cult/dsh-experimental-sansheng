@@ -4,6 +4,15 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-10-19
+
+### Fixed
+
+- Opening a subagent/team-member session no longer auto-opens the board. The
+  auto-open guard now waits until the header action's Session snapshot identity
+  matches the visible Session and that Session is a root (Lead) view, so the
+  brief parent-snapshot frame during navigation cannot trigger it.
+
 ## [0.4.0] — 2026-10-19
 
 ### Added
