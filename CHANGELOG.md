@@ -4,6 +4,15 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.3] — 2026-10-19
+
+### Removed
+
+- The board's 成员 tab and the task-card 负责人轨迹 button. They duplicated the
+  official Agent Team roster and the sidebar session list; case-level detail now
+  lives in 详细历史. Member-internal trajectories remain available from the
+  native Agent Team panel or the member session in the sidebar.
+
 ## [0.4.2] — 2026-10-19
 
 ### Fixed

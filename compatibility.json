@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "package": "dsh-experimental-sansheng",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "node": ">=22.19.0 || >=24",
   "testedHosts": [
     {
