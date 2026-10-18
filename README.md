@@ -49,6 +49,22 @@ For local development, install from the directory:
 dsh plugin --profile web add /absolute/path/to/dsh-experimental-sansheng
 ```
 
+**Full install (recommended)** — the companion bundle pulls in the core package, mounts the core row, and adds the new-task preset card:
+
+```sh
+dsh plugin --profile web add dsh-experimental-sansheng-profile
+```
+
+**Core only** (tools + board, manual mode entry):
+
+```sh
+dsh plugin --profile web add dsh-experimental-sansheng
+```
+
+The preset reuses the host's Standard child-plugin catalog with a 政事堂 persona. Selecting it starts the session already in the mode; existing Standard sessions are unaffected. Hosts without a preset selector (for example the headless profile) mount only the core row and keep the `sansheng_mode` entry point.
+
+> Why a second package: the preset's loader row must live in a package without a browser half. A package that declares `dsh.client` cannot also carry a second loader row — client-modules rejects one package resolving from two active sources. The companion bundles the declaration only; it is not a browser plugin.
+
 Optional deployment text override:
 
 ```yaml
@@ -61,6 +77,11 @@ Optional deployment text override:
 ```
 
 ## Flow
+
+Two entry points:
+
+- pick the **三省六部** preset when creating a task (requires `dsh-experimental-sansheng-profile`) — the session is in the mode from its first turn;
+- or, in any existing session, say "enter the 三省六部 mode" / call `sansheng_mode {action:"enter"}`.
 
 ```text
 1. 政事堂 (Lead)       sansheng_edict
@@ -138,7 +159,8 @@ The plugin depends on DSH Agent Teams (`@deepseek-ai/dsh-experimental-agent-team
 
 ## Known limitations
 
-- **The entry point is a tool, not a preset** yet: call `sansheng_mode`. A preset card for new sessions is planned.
+- **The preset catalog mirrors the host's Standard preset**: `preset-bundle/cordis.patch.yml` copies the current Standard child-plugin list. Re-sync it and release when a DSH upgrade changes Standard.
+- Hosts without agent presets (headless) mount only the tools; entry falls back to `sansheng_mode`.
 - Client plugins load per profile: refresh an already-open page after enabling/disabling.
 - Single process, shared checkout: write scopes are advisory; the Lead still reviews the final diff.
 - Reviewer granularity currently uses "reviewer is not an appointed ministry member" as the proxy for "author ≠ reviewer"; per-task authorship tracking is future work.

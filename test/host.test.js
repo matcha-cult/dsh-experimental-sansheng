@@ -12,10 +12,10 @@ import { apply } from '../index.js'
  * - a Lead tool result is committed as `tool/result`;
  * - a teammate record published with `sendMessage` arrives as `user/message`.
  */
-function harness({ teammates = [], tasks = [] } = {}) {
+function harness({ teammates = [], tasks = [], agentPreset } = {}) {
   const leader = {
     session: {
-      header: { id: 'sess-lead' },
+      header: { id: 'sess-lead', ...(agentPreset === undefined ? {} : { agentPreset }) },
       events: [],
     },
   }
@@ -82,7 +82,7 @@ function harness({ teammates = [], tasks = [] } = {}) {
       },
       stateOf(target, key) {
         if (key !== 'sansheng' || target?.events === undefined) return undefined
-        return target.events.reduce((state, event) => projection.apply(state, event), projection.init())
+        return target.events.reduce((state, event) => projection.apply(state, event), projection.init(target.header))
       },
     },
   }
@@ -211,6 +211,32 @@ test('mode, edict, gates, appointment, evidence and close flow through the Lead 
   assert.equal(state.active, true)
   assert.equal(state.closure.closedBy, 'lead')
   assert.ok(h.sections[0].text({ agent: lead }).includes('Current board state'))
+})
+
+test('a session composed from the 三省六部 preset starts active', async () => {
+  const h = harness({ agentPreset: 'sansheng' })
+  const lead = h.leader
+  assert.equal(h.projection.init(lead.session.header).active, true)
+
+  const before = JSON.parse(await h.dispatch('sansheng_board', {}, lead))
+  assert.equal(before.active, true)
+  assert.equal(before.edict, null)
+
+  // No sansheng_mode enter is needed: the preset header already activated it.
+  await h.dispatch('sansheng_edict', { goal: 'preset flow', acceptance: ['board is active'], tier: 'medium', roster_cap: 5 }, lead)
+  const after = JSON.parse(await h.dispatch('sansheng_board', {}, lead))
+  assert.equal(after.edict.goal, 'preset flow')
+
+  // Leaving the mode still wins over the preset-derived default on replay.
+  await h.dispatch('sansheng_mode', { action: 'leave' }, lead)
+  const left = JSON.parse(await h.dispatch('sansheng_board', {}, lead))
+  assert.equal(left.active, false)
+})
+
+test('a standard session still starts inactive', () => {
+  const h = harness({ agentPreset: 'standard' })
+  assert.equal(h.projection.init(h.leader.session.header).active, false)
+  assert.equal(h.projection.init(undefined).active, false)
 })
 
 test('prompt guidance stays silent before the mode is entered', () => {

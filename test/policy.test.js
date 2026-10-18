@@ -8,6 +8,7 @@ import {
   appointedMembers,
   completedTasksWithoutEvidence,
   createEmptyState,
+  createInitialState,
   foldEvent,
   latestGate,
   summarizeBoard,
@@ -102,6 +103,25 @@ function withEvidence(state, taskId = 'task-1') {
 /* ------------------------------------------------------------------ */
 /* Projection fold                                                     */
 /* ------------------------------------------------------------------ */
+
+test('an agent-preset selection event activates or deactivates the mode', () => {
+  const base = createEmptyState()
+  const selected = foldEvent(base, { type: 'agent-preset/selected', data: { agentPreset: 'sansheng' } }, 'sansheng')
+  assert.equal(selected.active, true)
+  const standard = foldEvent(selected, { type: 'agent-preset/selected', data: { agentPreset: 'standard' } }, 'sansheng')
+  assert.equal(standard.active, false)
+  const unrelated = foldEvent(base, { type: 'agent-preset/selected', data: { agentPreset: 'sansheng' } }, 'other')
+  assert.equal(unrelated.active, false)
+  const malformed = foldEvent(base, { type: 'agent-preset/selected', data: {} }, 'sansheng')
+  assert.equal(malformed.active, false)
+})
+
+test('createInitialState activates only for the 三省六部 preset', () => {
+  assert.equal(createInitialState(undefined, 'sansheng').active, false)
+  assert.equal(createInitialState({ agentPreset: 'standard' }, 'sansheng').active, false)
+  assert.equal(createInitialState({ agentPreset: 'sansheng' }, 'sansheng').active, true)
+  assert.equal(createInitialState({ agentPreset: 'sansheng' }, '').active, false)
+})
 
 test('empty state starts inactive with an empty board', () => {
   const state = createEmptyState()

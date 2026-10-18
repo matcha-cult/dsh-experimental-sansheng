@@ -68,7 +68,23 @@ dsh plugin --profile web add dsh-experimental-sansheng
 dsh plugin --profile web add /absolute/path/to/dsh-experimental-sansheng
 ```
 
-安装后无需额外配置。默认引导文本可以用插件配置覆盖：
+**完整安装（推荐）**：装配套 bundle，它会自动带上核心包，并同时挂载核心行与预设卡：
+
+```sh
+dsh plugin --profile web add dsh-experimental-sansheng-profile
+```
+
+**只装核心包**（工具 + 看板，手动进入模式）：
+
+```sh
+dsh plugin --profile web add dsh-experimental-sansheng
+```
+
+预设卡复用宿主 Standard 的子插件清单，外加政事堂 persona。选中它创建会话，该会话**从第一轮起就处于三省六部模式**，不需要手动进入；已有 Standard 会话不受影响。没有预设选择器的宿主（例如 headless profile）只挂载核心行，入口退化为 `sansheng_mode`。
+
+> 预设声明为什么单独一个包：bundle 的 loader 行要指向一个**不含浏览器半边**的包，才能避开 client-modules 对同一包出现多个来源的冲突；核心包的 `dsh.client` 与第二行不能同包共存。
+
+默认引导文本可以用插件配置覆盖：
 
 ```yaml
 - id: sansheng
@@ -81,7 +97,12 @@ dsh plugin --profile web add /absolute/path/to/dsh-experimental-sansheng
 
 ## 使用流程
 
-在任意会话里对 Lead 说“进入三省六部模式”，然后按顺序：
+两种入口：
+
+- **新建会话时选「三省六部」预设卡**（需安装 `dsh-experimental-sansheng-profile`）：该会话首轮即处于模式中；
+- **任意已有会话**：对 Lead 说“进入三省六部模式”，或调用 `sansheng_mode {action:"enter"}`。
+
+进入后按顺序：
 
 ```text
 1. 政事堂（Lead）拟旨     sansheng_edict
@@ -173,7 +194,8 @@ dsh plugin --profile web add /absolute/path/to/dsh-experimental-sansheng
 
 ## 已知限制
 
-- **模式入口是工具，不是 preset**：目前通过 `sansheng_mode` 进入；后续版本会提供 agent preset 卡片，让新会话直接选择模式。
+- **预设清单随宿主同步**：配套包 `preset-bundle/cordis.patch.yml` 复制了当前宿主 Standard 预设的子插件清单（工具、压缩、委派等）。DSH 升级后如果 Standard 清单变化，需要同步更新该文件并重新发版。
+- **无预设的宿主**（headless）：只挂载工具，模式入口退化为 `sansheng_mode`。
 - **浏览器插件按 profile 加载**：启用/禁用后已有页面可能需要刷新。
 - **单进程、共享 checkout**：写作用域只是提示，Bash/格式化工具仍可能越界；Lead 必须做最终 diff 审查。
 - **复核者粒度**：目前用“复核者不得是被任命的六部成员”来近似“作者 ≠ 复核者”；更细的任务级作者追踪会在后续版本加入。

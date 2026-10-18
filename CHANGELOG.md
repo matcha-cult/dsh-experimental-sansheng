@@ -4,6 +4,23 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] — 2026-10-18
+
+### Added
+
+- **三省六部 agent preset** (new companion package
+  `dsh-experimental-sansheng-profile`): the new-task page offers a 三省六部 card
+  next to Standard mode. The preset reuses the host's Standard child-plugin list
+  with a 政事堂 persona, and the mode activates automatically from the session's
+  durable `agent-preset/selected` event or `agentPreset` header, so the first
+  turn is already governed. Installing the companion alone also mounts the core
+  row (it depends on `dsh-experimental-sansheng`).
+- The live header board appears immediately for preset sessions; `sansheng_mode
+  leave` still overrides the preset-derived default and survives replay.
+- The preset lives in its own bundle because a package declaring `dsh.client`
+  cannot also carry a second loader row (client-modules rejects two active
+  sources for one package).
+
 ## [0.1.1] — 2026-10-18
 
 ### Fixed

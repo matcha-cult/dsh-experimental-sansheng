@@ -27,6 +27,7 @@ import {
   DEFAULT_SECTION,
   SanshengError,
   createEmptyState,
+  createInitialState,
   foldEvent,
   latestGate,
   serializeMessageRecord,
@@ -50,6 +51,7 @@ export const inject = ['tools', 'systemPrompt', 'sessionProjections']
 export const Config = z.object({
   section: z.string().default(DEFAULT_SECTION),
   maxExcerptChars: z.number().default(2000),
+  presetId: z.string().default('sansheng'),
 })
 
 /** One canonical compact output schema shared by every tool in this package. */
@@ -147,6 +149,7 @@ export function apply(ctx, config = {}) {
     maxExcerptChars: Number.isInteger(config.maxExcerptChars) && config.maxExcerptChars > 0
       ? config.maxExcerptChars
       : 2000,
+    presetId: typeof config.presetId === 'string' ? config.presetId : 'sansheng',
   }
 
   /**
@@ -255,8 +258,8 @@ export function apply(ctx, config = {}) {
     key: 'sansheng',
     stateVersion: 1,
     stateSchema: schema,
-    init: () => createEmptyState(),
-    apply: (state, event) => foldEvent(state, event),
+    init: (header) => createInitialState(header, settings.presetId),
+    apply: (state, event) => foldEvent(state, event, settings.presetId),
     wire: {
       viewSchema: schema,
       view: (state) => state,

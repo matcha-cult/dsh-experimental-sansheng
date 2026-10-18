@@ -1,0 +1,46 @@
+{
+  "name": "dsh-experimental-sansheng-profile",
+  "version": "0.1.2",
+  "description": "\u4e09\u7701\u516d\u90e8 agent-preset bundle for dsh-experimental-sansheng: adds the \u4e09\u7701\u516d\u90e8 card to the new-task preset selector.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": ">=20.11"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matcha-cult/dsh-experimental-sansheng.git",
+    "directory": "preset-bundle"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent-preset": "0.2.1-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-agent-preset": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "dsh-experimental-sansheng": "^0.1.2"
+  }
+}

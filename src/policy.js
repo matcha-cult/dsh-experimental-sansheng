@@ -75,6 +75,23 @@ export function isSanshengError(value) {
   return value instanceof SanshengError
 }
 
+/**
+ * Initial board state for one session. A session composed from the 三省六部
+ * agent preset starts with the mode active; every other session starts
+ * inactive and enters explicitly. The header is durable, so resume and fork
+ * keep the preset-derived default.
+ * @param {{agentPreset?: string}|undefined} header Session header.
+ * @param {string} presetId Preset identity that implies the mode.
+ * @returns {object} Initial board state.
+ */
+export function createInitialState(header, presetId) {
+  const state = createEmptyState()
+  if (typeof presetId === 'string' && presetId !== '' && header?.agentPreset === presetId) {
+    state.active = true
+  }
+  return state
+}
+
 /** @returns {object} the empty board state before any event. */
 export function createEmptyState() {
   return {
@@ -180,10 +197,16 @@ export function applyRecord(state, record) {
  *
  * @param {object} state Previous board state.
  * @param {{type?: string, data?: unknown}} event Committed session event.
+ * @param {string} [presetId] Preset identity that implies the mode.
  * @returns {object} Next board state (new object per applied record).
  */
-export function foldEvent(state, event) {
+export function foldEvent(state, event, presetId) {
   const type = event?.type
+  if (type === 'agent-preset/selected') {
+    const selected = event?.data?.agentPreset
+    if (typeof selected !== 'string') return state
+    return commit(state, { active: typeof presetId === 'string' && presetId !== '' && selected === presetId })
+  }
   if (type === 'tool/result') {
     if (event.data?.message?.isError === true) return state
     const content = event.data?.message?.content
