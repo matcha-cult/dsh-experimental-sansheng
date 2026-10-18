@@ -124,7 +124,7 @@ dsh plugin --profile web add dsh-experimental-sansheng
 - **离开模式**：必须先 `sansheng_close`，或传 `abandon_reason` 显式放弃（看板记录）。
 - **结案**：所有共享任务必须处于 completed/deleted，不能带着未完成任务结案。
 
-任意成员都可以随时 `sansheng_board` 读当前看板；Lead 可以 `sansheng_mode {action:"status"}` 查看摘要。
+任意成员都可以随时 `sansheng_board` 读当前看板；Lead 可以 `sansheng_mode {action:"status"}` 查看摘要。会话页头的「三省六部」按钮会打开完整看板抽屉：**总览 / 任务 / 审议 / 证据 / 时间线**五个页签；模式激活时会自动打开。时间线包含被拒绝的调用（denied）与所有模式/拟旨/任命/审议/取证/结案记录，模式激活后会保留最近 200 条。
 
 ## 工具
 

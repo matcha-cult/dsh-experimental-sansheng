@@ -34,6 +34,30 @@ export const RECORD_VERSION = 1
 /** Record operations the board fold understands. */
 export const RECORD_OPS = Object.freeze(['mode', 'edict', 'appoint', 'gate', 'evidence', 'close', 'board'])
 
+/** Bounded audit history kept on the board for the timeline view. */
+export const MAX_HISTORY = 200
+
+/** A stalled board is flagged after this long without any new record. */
+export const STALL_MS = 30 * 60 * 1000
+
+/** Policy failure codes that may be folded into the audit history. */
+const AUDIT_CODES = new Set([
+  'CANNOT_APPOINT_LEAD', 'CASE_ALREADY_CLOSED', 'COMPLETED_TASK_WITHOUT_EVIDENCE',
+  'DEFECTS_ON_PASS', 'DUPLICATE_EVIDENCE', 'DUPLICATE_TASK_REVIEW', 'FIELD_TOO_LONG',
+  'INVALID_ACTION', 'INVALID_DIGEST', 'INVALID_EXIT_CODE', 'INVALID_FIELD',
+  'INVALID_GATE_KIND', 'INVALID_ROSTER_CAP', 'INVALID_TASK_ID', 'INVALID_TIER',
+  'INVALID_VERDICT', 'INVALID_WRITE_SCOPE', 'LEAD_ONLY',
+  'LEAVE_REQUIRES_CLOSE_OR_ABANDON', 'MEMBER_ALREADY_APPOINTED',
+  'MISSING_EXPECTED_REVISION', 'MODE_NOT_ACTIVE', 'NO_EDICT', 'NO_EVIDENCE',
+  'NO_EVIDENCE_TO_REVIEW', 'OPEN_TASKS', 'PLAN_GATE_NOT_PASSED',
+  'PLAN_NOT_REVISED', 'RESULT_GATE_NOT_PASSED', 'RESULT_NOT_REVISED',
+  'REVIEWER_IS_EXECUTOR', 'REVIEWER_MUST_BE_TEAMMATE', 'REVIEWER_MUST_DIFFER',
+  'ROSTER_CAP_ABOVE_TIER', 'ROSTER_CAP_EXCEEDED', 'SELF_REVIEW_NOT_ALLOWED',
+  'SMALL_TIER_NEEDS_NO_TEAM', 'STALE_REVISION', 'TASK_NOT_COMPLETED',
+  'TASK_NOT_FOUND', 'TASK_REVIEWS_INCOMPLETE', 'TASK_REVIEWS_REQUIRED',
+  'TASK_REVIEW_NOT_PASS', 'UNKNOWN_DEPARTMENT', 'UNKNOWN_REVIEW_TASK',
+])
+
 
 /** Deployment-owned default guidance rendered while the mode is active. */
 export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù Bù — "Three Departments and Six Ministries"), for complex multi-deliverable work. Follow the three-departments-six-ministries skill for the full procedure; this section only states the enforced state machine.
@@ -104,6 +128,8 @@ export function createEmptyState() {
     evidence: [],
     closure: null,
     abandoned: null,
+    history: [],
+    updatedAt: null,
     revision: 0,
   }
 }
@@ -155,19 +181,52 @@ export function parseRecordText(text) {
 }
 
 /**
+ * Append one bounded audit-history entry and stamp the board's update time.
+ * @param {object} state Next board state.
+ * @param {object} entry History entry.
+ * @returns {object} State with history.
+ */
+function withHistory(state, entry) {
+  const history = [...(state.history ?? []), entry].slice(-MAX_HISTORY)
+  const updatedAt = typeof entry.at === 'number'
+    ? Math.max(state.updatedAt ?? 0, entry.at)
+    : state.updatedAt ?? null
+  return { ...state, history, updatedAt }
+}
+
+/**
+ * Resolve one record's display timestamp.
+ * @param {object} record Parsed record.
+ * @param {number|null} eventTime Session event time when available.
+ * @param {number|null} fallback Object createdAt.
+ * @returns {number|null} Timestamp or null.
+ */
+function recordTime(record, eventTime, fallback) {
+  if (Number.isInteger(eventTime) && eventTime > 0) return eventTime
+  if (typeof record.at === 'number' && record.at > 0) return record.at
+  return typeof fallback === 'number' ? fallback : null
+}
+
+/**
  * Apply one record envelope to the board state.
  * @param {object} state Previous board state.
  * @param {object} record Parsed record envelope.
+ * @param {number|null} [eventTime] Committed event timestamp for the timeline.
  * @returns {object} Next board state.
  */
-export function applyRecord(state, record) {
+export function applyRecord(state, record, eventTime = null) {
   if (record === null || typeof record !== 'object') return state
   const { revision, stale } = recordRevision(state, record)
   if (stale) return state
   switch (record.op) {
     case 'mode': {
       if (typeof record.active !== 'boolean') return state
-      if (record.active === true) return commit(state, { active: true, abandoned: null }, revision)
+      if (record.active === true) {
+        return withHistory(
+          commit(state, { active: true, abandoned: null }, revision),
+          { op: 'mode', rev: revision, at: recordTime(record, eventTime, null), by: record.by ?? 'lead', active: true },
+        )
+      }
       const patch = { active: false }
       if (typeof record.abandoned === 'string' && record.abandoned.trim() !== '') {
         patch.abandoned = {
@@ -175,27 +234,76 @@ export function applyRecord(state, record) {
           at: typeof record.abandonedAt === 'number' ? record.abandonedAt : null,
         }
       }
-      return commit(state, patch, revision)
+      return withHistory(
+        commit(state, patch, revision),
+        {
+          op: 'mode',
+          rev: revision,
+          at: recordTime(record, eventTime, patch.abandoned?.at ?? null),
+          by: record.by ?? 'lead',
+          active: false,
+          abandoned: patch.abandoned?.reason ?? null,
+        },
+      )
     }
     case 'edict': {
       const edict = normalizeStoredEdict(record.edict)
-      return edict === null ? state : commit(state, { edict }, revision)
+      if (edict === null) return state
+      return withHistory(
+        commit(state, { edict }, revision),
+        { op: 'edict', rev: revision, at: recordTime(record, eventTime, edict.createdAt), by: record.by ?? 'lead', revisionNo: edict.revision, goal: edict.goal, tier: edict.tier },
+      )
     }
     case 'appoint': {
       const appointment = normalizeStoredAppointment(record.appointment)
-      return appointment === null ? state : commit(state, { appointments: [...state.appointments, appointment] }, revision)
+      if (appointment === null) return state
+      return withHistory(
+        commit(state, { appointments: [...state.appointments, appointment] }, revision),
+        { op: 'appoint', rev: revision, at: recordTime(record, eventTime, appointment.createdAt), by: record.by ?? 'lead', member: appointment.member, department: appointment.department },
+      )
     }
     case 'gate': {
       const gate = normalizeStoredGate(record.gate)
-      return gate === null ? state : commit(state, { gates: [...state.gates, gate] }, revision)
+      if (gate === null) return state
+      return withHistory(
+        commit(state, { gates: [...state.gates, gate] }, revision),
+        {
+          op: 'gate',
+          rev: revision,
+          at: recordTime(record, eventTime, gate.createdAt),
+          by: gate.reviewer,
+          kind: gate.kind,
+          verdict: gate.verdict,
+          checked: gate.checked.length,
+          reviews: gate.reviews.length,
+          defects: gate.defects,
+        },
+      )
     }
     case 'evidence': {
       const evidence = normalizeStoredEvidence(record.evidence)
-      return evidence === null ? state : commit(state, { evidence: [...state.evidence, evidence] }, revision)
+      if (evidence === null) return state
+      return withHistory(
+        commit(state, { evidence: [...state.evidence, evidence] }, revision),
+        {
+          op: 'evidence',
+          rev: revision,
+          at: recordTime(record, eventTime, evidence.createdAt),
+          by: evidence.submittedBy,
+          taskId: evidence.taskId,
+          command: evidence.command,
+          exitCode: evidence.exitCode,
+          digest: evidence.digest,
+        },
+      )
     }
     case 'close': {
       const closure = normalizeStoredClosure(record.closure)
-      return closure === null ? state : commit(state, { closure }, revision)
+      if (closure === null) return state
+      return withHistory(
+        commit(state, { closure }, revision),
+        { op: 'close', rev: revision, at: recordTime(record, eventTime, closure.createdAt), by: closure.closedBy, conclusions: closure.conclusions },
+      )
     }
     default:
       return state
@@ -222,14 +330,32 @@ export function foldEvent(state, event, presetId) {
     if (typeof selected !== 'string') return state
     return commit(state, { active: typeof presetId === 'string' && presetId !== '' && selected === presetId })
   }
+  const eventTime = Number.isInteger(event?.time) && event.time > 0 ? event.time : null
   if (type === 'tool/result') {
-    if (event.data?.message?.isError === true) return state
     const content = event.data?.message?.content
+    if (event.data?.message?.isError === true) {
+      if (!Array.isArray(content)) return state
+      for (const block of content) {
+        if (block?.type !== 'text' || typeof block.text !== 'string') continue
+        const text = block.text.trim().replace(/^(?:Error:\s*)+/, '')
+        const match = /^([A-Z][A-Z0-9_]+):/.exec(text)
+        if (match === null || !AUDIT_CODES.has(match[1])) continue
+        return withHistory(state, {
+          op: 'denied',
+          rev: state.revision,
+          at: eventTime,
+          by: null,
+          code: match[1],
+          message: text.slice(0, 240),
+        })
+      }
+      return state
+    }
     if (!Array.isArray(content)) return state
     for (const block of content) {
       if (block?.type !== 'text' || typeof block.text !== 'string') continue
       const record = parseRecordText(block.text)
-      if (record !== null) return applyRecord(state, record)
+      if (record !== null) return applyRecord(state, record, eventTime)
     }
     return state
   }
@@ -239,7 +365,7 @@ export function foldEvent(state, event, presetId) {
     for (const block of content) {
       if (block?.type !== 'text' || typeof block.text !== 'string') continue
       const record = parseRecordText(block.text)
-      if (record !== null) return applyRecord(state, record)
+      if (record !== null) return applyRecord(state, record, eventTime)
     }
   }
   return state
@@ -325,7 +451,11 @@ export function summarizeBoard(state, tasks = []) {
   return {
     active: state.active,
     revision: state.revision,
+    updatedAt: state.updatedAt,
     abandoned: state.abandoned,
+    openTasks: tasks
+      .filter((task) => task !== null && typeof task === 'object' && task.status !== 'completed' && task.status !== 'deleted')
+      .map((task) => task.id),
     planRounds: 1 + state.gates.filter((gate) => gate.kind === 'plan' && gate.verdict === 'reject').length,
     resultRounds: 1 + state.gates.filter((gate) => gate.kind === 'result' && gate.verdict === 'reject').length,
     edict: state.edict === null ? null : {
@@ -346,6 +476,7 @@ export function summarizeBoard(state, tasks = []) {
     completedTasks: tasks.filter((task) => task?.status === 'completed').map((task) => task.id),
     missingEvidence: completedTasksWithoutEvidence(state, tasks),
     taskReviews: resultGate === undefined ? [] : resultGate.reviews,
+    alerts: boardAlerts(state, tasks),
     closure: state.closure === null ? null : {
       conclusions: state.closure.conclusions,
       deliverables: state.closure.deliverables,
@@ -354,6 +485,46 @@ export function summarizeBoard(state, tasks = []) {
       closedBy: state.closure.closedBy,
     },
   }
+}
+
+/**
+ * Human/model-readable warnings for the current board, shown in the red zone.
+ * @param {object} state Board state.
+ * @param {Array<object>} tasks Current Team task views.
+ * @param {number} [now] Current epoch ms (injectable for tests).
+ * @returns {string[]} Warning lines.
+ */
+export function boardAlerts(state, tasks = [], now = Date.now()) {
+  if (state.active !== true) return []
+  const alerts = []
+  if (state.abandoned !== null && state.abandoned !== undefined) {
+    alerts.push(`案件已放弃：${state.abandoned.reason}。重新进入模式可继续。`)
+  }
+  if (state.closure !== null) return alerts
+  if (state.edict === null) alerts.push('尚未拟旨：先调用 sansheng_edict。')
+  const plan = latestGate(state, 'plan')
+  const result = latestGate(state, 'result')
+  if (state.edict !== null && plan === undefined) alerts.push('计划门未审：需要门下省 sansheng_gate {kind:"plan"}。')
+  if (plan !== undefined && plan.verdict === 'reject') alerts.push('计划被门封驳：按 defects 整改并重新拟旨。')
+  if (state.edict !== null && plan?.verdict === 'pass' && state.edict.tier !== 'small'
+    && state.appointments.length === 0) {
+    alerts.push('计划已过门但尚未派工：先 sansheng_appoint。')
+  }
+  const completed = tasks.filter((task) => task?.status === 'completed')
+  const covered = new Set(state.evidence.map((record) => record.taskId))
+  const missing = completed.filter((task) => covered.has(task.id) === false)
+  if (missing.length > 0) alerts.push(`已完成任务缺少证据：${missing.map((task) => task.id).join(', ')}。`)
+  const open = tasks.filter((task) => task !== null && typeof task === 'object'
+    && task.status !== 'completed' && task.status !== 'deleted')
+  if (open.length > 0) alerts.push(`未完成任务：${open.map((task) => task.id).join(', ')}。`)
+  if (result !== undefined && result.verdict === 'reject') alerts.push('成果被门封驳：补充新证据后再审。')
+  if (result !== undefined && result.verdict === 'pass' && result.reviews.length < completed.length) {
+    alerts.push('成果门通过但逐任务 review 不完整。')
+  }
+  if (state.updatedAt !== null && now - state.updatedAt > STALL_MS) {
+    alerts.push(`看板已 ${Math.round((now - state.updatedAt) / 60000)} 分钟无新记录，检查成员是否停滞。`)
+  }
+  return alerts
 }
 
 /**

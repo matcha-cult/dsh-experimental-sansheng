@@ -1,6 +1,6 @@
 {
   "name": "dsh-experimental-sansheng",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "\u4e09\u7701\u516d\u90e8 (S\u0101n Sh\u011bng Li\u00f9 B\u00f9) mode for DeepSeek Harness: in-session edict, independent review gates, and a dedicated board backed by the session event log rather than a shared directory.",
   "type": "module",
   "main": "index.js",

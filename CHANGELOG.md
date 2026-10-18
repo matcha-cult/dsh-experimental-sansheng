@@ -4,6 +4,25 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] — 2026-10-18
+
+### Added
+
+- **Full board drawer**: the conversation-header action now opens a tabbed
+  三省六部 board — 总览 / 任务 / 审议 / 证据 / 时间线 — instead of a small
+  popover. It auto-opens when the mode becomes active.
+- **Task kanban**: shared tasks are grouped by status with owner, evidence and
+  per-task review badges (已取证 / 缺证据 / 已复审).
+- **Gate detail**: each gate shows its round, reviewer, checked items, defects
+  and per-task reviews; the overview keeps the compact gate summary.
+- **Evidence list**: task, command, exit code, digest prefix and excerpt.
+- **Audit timeline**: the board keeps a bounded history (200 entries) of mode,
+  edict, appointment, gate, evidence and close records, plus rejected tool
+  calls (`denied`) folded from error tool results. The header dot turns red on
+  a rejection or a board stalled for 30+ minutes.
+- **Board alerts** are part of `sansheng_board` output: unfinished tasks,
+  missing evidence, incomplete task reviews and stale boards.
+
 ## [0.2.0] — 2026-10-18
 
 ### Breaking

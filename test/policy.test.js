@@ -6,6 +6,7 @@ import {
   SanshengError,
   TIERS,
   appointedMembers,
+  boardAlerts,
   completedTasksWithoutEvidence,
   createEmptyState,
   createInitialState,
@@ -266,6 +267,33 @@ test('a teammate message can carry a board record into the Lead log', () => {
   }, 3))))
   assert.equal(latestGate(next, 'plan')?.verdict, 'reject')
   assert.deepEqual(latestGate(next, 'plan')?.defects, ['no command'])
+})
+
+test('the board keeps a bounded audit history and folds denied calls', () => {
+  let state = activeState()
+  assert.equal(state.history.length, 2)
+  assert.equal(state.history[0].op, 'mode')
+  assert.equal(state.history[1].op, 'edict')
+  const denied = foldEvent(state, {
+    type: 'tool/result',
+    time: 1234567890,
+    data: { message: { role: 'tool', isError: true, content: [{ type: 'text', text: 'Error: STALE_REVISION: expected revision 1 but board is at 2' }] } },
+  })
+  assert.equal(denied.revision, state.revision)
+  assert.equal(denied.history.at(-1).op, 'denied')
+  assert.equal(denied.history.at(-1).code, 'STALE_REVISION')
+  assert.equal(denied.updatedAt, 1234567890)
+})
+
+test('board alerts expose unfinished work and stale boards', () => {
+  const state = closedState()
+  const alerts = boardAlerts(state, [
+    { id: 'task-1', status: 'completed' },
+    { id: 'task-2', status: 'in_progress' },
+  ], (state.updatedAt ?? Date.now()) + 31 * 60 * 1000)
+  assert.ok(alerts.some((line) => line.includes('未完成任务')))
+  const staleState = { ...state, updatedAt: Date.now() - 31 * 60 * 1000 }
+  assert.ok(boardAlerts(staleState, [{ id: 'task-1', status: 'completed' }]).some((line) => line.includes('停滞')))
 })
 
 test('ordinary teammate messages do not change the board', () => {

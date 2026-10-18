@@ -97,7 +97,7 @@ Every mutating call echoes the `revision` last read from `sansheng_board` as `ex
 
 Hard invariants since 0.2.0: stale revisions are rejected; a rejected plan must be re-drafted and a rejected result needs new evidence; plan and result gates need different reviewers, and reviewers may not own a shared task; passes cite `checked` items; evidence only covers completed tasks and needs a hex digest plus excerpt; leaving an open case requires `abandon_reason`; closing rejects unfinished shared tasks.
 
-Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`.
+Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
 
 ## Tools
 

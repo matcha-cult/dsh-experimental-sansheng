@@ -130,6 +130,8 @@ function stateSchema() {
     evidence: zod.array(evidence),
     closure: closure.nullable(),
     abandoned: zod.object({ reason: zod.string(), at: zod.number().nullable() }).nullable(),
+    history: zod.array(zod.any()),
+    updatedAt: zod.number().nullable(),
     revision: zod.number(),
   })
 }
@@ -417,7 +419,7 @@ export function apply(ctx, config = {}) {
         return JSON.stringify({ active, changed: false, revision: effectiveRevision(agent) })
       }
       const revision = reserveRevision(agent)
-      const payload = { rev: revision, active, changed: true }
+      const payload = { rev: revision, by: caller.name, active, changed: true }
       if (normalized.abandonReason !== null) {
         payload.abandoned = normalized.abandonReason
         payload.abandonedAt = Date.now()
@@ -475,7 +477,7 @@ export function apply(ctx, config = {}) {
       const revision = reserveRevision(agent)
       const contentRevision = (state.edict === null ? 0 : state.edict.revision) + 1
       const edict = { revision: contentRevision, rev: revision, ...normalized, createdAt: Date.now() }
-      return serializeRecord('edict', { rev: revision, edict })
+      return serializeRecord('edict', { rev: revision, by: caller.name, edict })
     },
   })
 
@@ -537,7 +539,7 @@ export function apply(ctx, config = {}) {
         writeScopes: normalized.writeScopes,
         createdAt: Date.now(),
       }
-      return serializeRecord('appoint', { rev: revision, appointment })
+      return serializeRecord('appoint', { rev: revision, by: caller.name, appointment })
     },
   })
 
@@ -604,13 +606,13 @@ export function apply(ctx, config = {}) {
       // board state; its own tool result is recorded in the child session only.
       if (caller.role === 'teammate') {
         try {
-          await publishToLead(agent, serializeMessageRecord('gate', { rev: revision, gate }), exec.signal)
+          await publishToLead(agent, serializeMessageRecord('gate', { rev: revision, by: caller.name, gate }), exec.signal)
         } catch (error) {
           releaseRevision(agent, revision)
           throw error
         }
       }
-      return serializeRecord('gate', { rev: revision, gate })
+      return serializeRecord('gate', { rev: revision, by: caller.name, gate })
     },
   })
 
@@ -658,13 +660,13 @@ export function apply(ctx, config = {}) {
       // Same durable path as a teammate verdict: publish it into the Lead log.
       if (caller.role === 'teammate') {
         try {
-          await publishToLead(agent, serializeMessageRecord('evidence', { rev: revision, evidence }), exec.signal)
+          await publishToLead(agent, serializeMessageRecord('evidence', { rev: revision, by: caller.name, evidence }), exec.signal)
         } catch (error) {
           releaseRevision(agent, revision)
           throw error
         }
       }
-      return serializeRecord('evidence', { rev: revision, evidence })
+      return serializeRecord('evidence', { rev: revision, by: caller.name, evidence })
     },
   })
 
@@ -719,7 +721,7 @@ export function apply(ctx, config = {}) {
         closedBy: caller.name,
         createdAt: Date.now(),
       }
-      return serializeRecord('close', { rev: revision, closure, evidenceCount: state.evidence.length })
+      return serializeRecord('close', { rev: revision, by: caller.name, closure, evidenceCount: state.evidence.length })
     },
   })
 
