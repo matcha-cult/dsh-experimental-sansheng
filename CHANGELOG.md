@@ -24,8 +24,7 @@ and this project uses [Semantic Versioning](https://semver.org/).
 - `sansheng` session projection folded from `sansheng/*` events and a Web
   conversation-header board (`client.js`) rendering the projection together with
   the native `agentTeam` projection.
-- Pure policy module (`src/policy.js`) with 27 unit tests plus host registration
-  smoke tests.
+- Pure policy module (`src/policy.js`) with 31 tests (policy + host registration smoke tests).
 - `.github/workflows/ci.yml` running `npm run verify` on push and pull request.
 
 ### Notes

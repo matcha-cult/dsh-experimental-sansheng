@@ -41,7 +41,7 @@
 
 ## 与技能的区别
 
-[`three-departments-six-ministries`](https://github.com/matcha-cult/dsh-experimental-sansheng) 技能（同名的 skill）是**流程说明书**：它告诉模型该怎么做，但无法阻止模型偷懒。
+`three-departments-six-ministries` 技能（同名的 skill）是**流程说明书**：它告诉模型该怎么做，但无法阻止模型偷懒。
 
 本插件是**执行与审计层**：
 
