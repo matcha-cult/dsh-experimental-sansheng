@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
 			".dss-chip b{font-weight:600;color:var(--dsw-alias-label-primary)}",
 			".dss-close{background:0 0;border:0;color:var(--dsw-alias-label-tertiary);cursor:pointer;font-size:20px;line-height:1;padding:2px 6px;border-radius:6px}",
 			".dss-close:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2,#2a2b30)}",
-			".dss-tabs{flex-wrap:wrap}display:flex;gap:2px;padding:6px 12px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3b40);flex-wrap:wrap}",
+			".dss-tabs{display:flex;gap:2px;padding:6px 12px 0;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3b40);flex-wrap:wrap}",
 			".dss-tab{background:0 0;border:0;border-bottom:2px solid transparent;color:var(--dsw-alias-label-tertiary);cursor:pointer;padding:6px 10px;font-size:12px}",
 			".dss-tab:hover{color:var(--dsw-alias-label-primary)}",
 			".dss-tab-on{color:var(--dsw-alias-label-primary);border-bottom-color:var(--dsw-alias-state-business-primary,#4c8dff)}",

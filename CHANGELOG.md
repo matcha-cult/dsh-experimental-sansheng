@@ -4,6 +4,14 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] — 2026-10-19
+
+### Fixed
+
+- Restored the original board tab CSS. The 0.4.0 wrap guard was inserted inside
+  the `.dss-tabs` declaration, splitting it so `display:flex`, `gap` and padding
+  were lost; tabs collapsed against each other. The rule is valid again.
+
 ## [0.4.1] — 2026-10-19
 
 ### Fixed
