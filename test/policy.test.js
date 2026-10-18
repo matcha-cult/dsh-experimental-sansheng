@@ -31,6 +31,28 @@ function assertCode(fn, code) {
   })
 }
 
+function record(op, payload) {
+  return JSON.stringify({ sansheng: 1, op, ...payload })
+}
+
+function toolResult(text) {
+  return { type: 'tool/result', data: { message: { role: 'tool', content: [{ type: 'text', text }] } } }
+}
+
+function teammateMessage(text) {
+  return {
+    type: 'user/message',
+    data: {
+      source: { kind: 'agent-message' },
+      content: [{ type: 'text', text: `Team message from menxia: ${text}` }],
+    },
+  }
+}
+
+function marked(text) {
+  return `SANS_RECORD_V1 ${text}`
+}
+
 function baseEdict(overrides = {}) {
   return {
     revision: 1,
@@ -46,42 +68,35 @@ function baseEdict(overrides = {}) {
 }
 
 function activeState(edict = baseEdict()) {
-  let state = foldEvent(createEmptyState(), { type: 'sansheng/mode', data: { active: true } })
-  state = foldEvent(state, { type: 'sansheng/edict', data: { edict } })
+  let state = foldEvent(createEmptyState(), toolResult(record('mode', { active: true })))
+  state = foldEvent(state, toolResult(record('edict', { edict })))
   return state
 }
 
+function gateRecord(gate) {
+  return toolResult(record('gate', { gate }))
+}
+
 function withPlanPass(state) {
-  return foldEvent(state, {
-    type: 'sansheng/gate',
-    data: {
-      gate: {
-        id: 'gate-1', kind: 'plan', verdict: 'pass', reviewer: 'menxia', defects: [], summary: null, createdAt: null,
-      },
-    },
-  })
+  return foldEvent(state, gateRecord({
+    id: 'gate-1', kind: 'plan', verdict: 'pass', reviewer: 'menxia', defects: [], summary: null, createdAt: null,
+  }))
 }
 
 function withAppointment(state, member = 'gongbu', department = '工部') {
-  return foldEvent(state, {
-    type: 'sansheng/appoint',
-    data: {
-      appointment: {
-        id: 'ap-1', member, department, responsibility: null, writeScopes: ['src'], createdAt: null,
-      },
+  return foldEvent(state, toolResult(record('appoint', {
+    appointment: {
+      id: 'ap-1', member, department, responsibility: null, writeScopes: ['src'], createdAt: null,
     },
-  })
+  })))
 }
 
 function withEvidence(state, taskId = 'task-1') {
-  return foldEvent(state, {
-    type: 'sansheng/evidence',
-    data: {
-      evidence: {
-        id: 'ev-1', taskId, command: 'npm test', exitCode: 0, digest: null, excerpt: 'ok', submittedBy: 'xingbu', sourceSessionId: null, createdAt: null,
-      },
+  return foldEvent(state, toolResult(record('evidence', {
+    evidence: {
+      id: 'ev-1', taskId, command: 'npm test', exitCode: 0, digest: null, excerpt: 'ok', submittedBy: 'xingbu', sourceSessionId: null, createdAt: null,
     },
-  })
+  })))
 }
 
 /* ------------------------------------------------------------------ */
@@ -115,10 +130,7 @@ test('foldEvent derives the board from append-only events', () => {
 
 test('later gate verdicts override earlier ones', () => {
   let state = activeState()
-  state = foldEvent(state, {
-    type: 'sansheng/gate',
-    data: { gate: { id: 'gate-1', kind: 'plan', verdict: 'reject', reviewer: 'menxia', defects: ['no acceptance'], summary: null, createdAt: null } },
-  })
+  state = foldEvent(state, gateRecord({ id: 'gate-1', kind: 'plan', verdict: 'reject', reviewer: 'menxia', defects: ['no acceptance'], summary: null, createdAt: null }))
   state = withPlanPass(state)
   assert.equal(latestGate(state, 'plan')?.verdict, 'pass')
   assert.equal(state.gates.length, 2)
@@ -127,16 +139,35 @@ test('later gate verdicts override earlier ones', () => {
 test('unknown and malformed events are ignored during replay', () => {
   const state = activeState()
   assert.equal(foldEvent(state, { type: 'other/event', data: {} }), state)
-  assert.equal(foldEvent(state, { type: 'sansheng/gate', data: { gate: { kind: 'plan' } } }), state)
   assert.equal(foldEvent(state, null), state)
-  assert.equal(foldEvent(state, { type: 'sansheng/edict', data: {} }), state)
+  assert.equal(foldEvent(state, toolResult('not json')), state)
+  assert.equal(foldEvent(state, toolResult(JSON.stringify({ sansheng: 1, op: 'gate' }))), state)
+  assert.equal(foldEvent(state, toolResult(JSON.stringify({ hello: 1 }))), state)
+  assert.equal(
+    foldEvent(state, { type: 'tool/result', data: { message: { isError: true, content: [{ type: 'text', text: record('mode', { active: true }) }] } } }),
+    state,
+  )
 })
 
 test('leaving the mode preserves the audited board', () => {
   let state = withPlanPass(activeState())
-  state = foldEvent(state, { type: 'sansheng/mode', data: { active: false } })
+  state = foldEvent(state, toolResult(record('mode', { active: false })))
   assert.equal(state.active, false)
   assert.equal(latestGate(state, 'plan')?.verdict, 'pass')
+})
+
+test('a teammate message can carry a board record into the Lead log', () => {
+  const state = activeState()
+  const next = foldEvent(state, teammateMessage(marked(record('gate', {
+    gate: { id: 'gate-9', kind: 'plan', verdict: 'reject', reviewer: 'menxia', defects: ['no command'], summary: null, createdAt: null },
+  }))))
+  assert.equal(latestGate(next, 'plan')?.verdict, 'reject')
+  assert.deepEqual(latestGate(next, 'plan')?.defects, ['no command'])
+})
+
+test('ordinary teammate messages do not change the board', () => {
+  const state = activeState()
+  assert.equal(foldEvent(state, teammateMessage('制敕已修订，请重新审议。')), state)
 })
 
 /* ------------------------------------------------------------------ */
@@ -278,12 +309,7 @@ test('evidence may reference an existing shared task only', () => {
 
 function closedState() {
   let state = withEvidence(withAppointment(withPlanPass(activeState())))
-  return foldEvent(state, {
-    type: 'sansheng/gate',
-    data: {
-      gate: { id: 'gate-2', kind: 'result', verdict: 'pass', reviewer: 'yushi', defects: [], summary: null, createdAt: null },
-    },
-  })
+  return foldEvent(state, gateRecord({ id: 'gate-2', kind: 'result', verdict: 'pass', reviewer: 'yushi', defects: [], summary: null, createdAt: null }))
 }
 
 test('closing is Lead-only and requires both gates', () => {
@@ -296,10 +322,7 @@ test('closing is Lead-only and requires both gates', () => {
 
 test('closing requires at least one evidence record', () => {
   let state = withPlanPass(activeState())
-  state = foldEvent(state, {
-    type: 'sansheng/gate',
-    data: { gate: { id: 'gate-2', kind: 'result', verdict: 'pass', reviewer: 'yushi', defects: [], summary: null, createdAt: null } },
-  })
+  state = foldEvent(state, gateRecord({ id: 'gate-2', kind: 'result', verdict: 'pass', reviewer: 'yushi', defects: [], summary: null, createdAt: null }))
   assertCode(
     () => validateCloseInput(state, { conclusions: ['done'], deliverables: ['d'] }, [], LEAD),
     'NO_EVIDENCE',

@@ -21,15 +21,19 @@ export const DEPARTMENT_NAMES = Object.freeze(['吏部', '户部', '礼部', '�
 /** The two independent review gates (门下省). */
 export const GATE_KINDS = Object.freeze(['plan', 'result'])
 
-/** Where the board lives: the Lead session's append-only event log. */
-export const BOARD_EVENT_TYPES = Object.freeze([
-  'sansheng/mode',
-  'sansheng/edict',
-  'sansheng/appoint',
-  'sansheng/gate',
-  'sansheng/evidence',
-  'sansheng/close',
-])
+/**
+ * Protocol marker for one 三省六部 record carried by a tool result or a
+ * teammate message. Tool results carry the bare JSON envelope; teammate
+ * messages prefix this marker so the Lead can tell the record apart from prose.
+ */
+export const RECORD_MARKER = 'SANS_RECORD_V1'
+
+/** Record envelope version. */
+export const RECORD_VERSION = 1
+
+/** Record operations the board fold understands. */
+export const RECORD_OPS = Object.freeze(['mode', 'edict', 'appoint', 'gate', 'evidence', 'close', 'board'])
+
 
 /** Deployment-owned default guidance rendered while the mode is active. */
 export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù Bù — "Three Departments and Six Ministries"), for complex multi-deliverable work. Follow the three-departments-six-ministries skill for the full procedure; this section only states the enforced state machine.
@@ -85,41 +89,120 @@ export function createEmptyState() {
 }
 
 /**
- * Apply one committed session event to the board state. Unknown events and
- * malformed payloads are ignored: replay must stay total so a projection
- * failure can never hide the rest of the board.
+ * Serialize one record envelope for a tool result (bare JSON, no marker).
+ * @param {string} op Record operation.
+ * @param {object} payload Record payload.
+ * @returns {string} JSON text.
+ */
+export function serializeRecord(op, payload) {
+  return JSON.stringify({ sansheng: RECORD_VERSION, op, ...payload })
+}
+
+/**
+ * Serialize one record for a Teammate-to-Lead message. The marker lets the
+ * Lead's projection find the record inside the message without confusing it
+ * with ordinary prose.
+ * @param {string} op Record operation.
+ * @param {object} payload Record payload.
+ * @returns {string} Marked message text.
+ */
+export function serializeMessageRecord(op, payload) {
+  return `${RECORD_MARKER} ${serializeRecord(op, payload)}`
+}
+
+/**
+ * Parse a record envelope out of a tool-result text or a teammate message.
+ * Accepts both the bare JSON form and the marked message form; anything else
+ * is ignored. Replay must stay total, so this never throws.
+ * @param {unknown} text Candidate text.
+ * @returns {object|null} Parsed record or null.
+ */
+export function parseRecordText(text) {
+  if (typeof text !== 'string') return null
+  const at = text.indexOf(RECORD_MARKER)
+  const candidate = (at >= 0 ? text.slice(at + RECORD_MARKER.length) : text).trim()
+  if (candidate.startsWith('{') === false) return null
+  let record
+  try {
+    record = JSON.parse(candidate)
+  } catch {
+    return null
+  }
+  if (record === null || typeof record !== 'object') return null
+  if (record.sansheng !== RECORD_VERSION) return null
+  if (typeof record.op !== 'string') return null
+  return record
+}
+
+/**
+ * Apply one record envelope to the board state.
+ * @param {object} state Previous board state.
+ * @param {object} record Parsed record envelope.
+ * @returns {object} Next board state.
+ */
+export function applyRecord(state, record) {
+  if (record === null || typeof record !== 'object') return state
+  switch (record.op) {
+    case 'mode':
+      return typeof record.active === 'boolean' ? commit(state, { active: record.active }) : state
+    case 'edict': {
+      const edict = normalizeStoredEdict(record.edict)
+      return edict === null ? state : commit(state, { edict })
+    }
+    case 'appoint': {
+      const appointment = normalizeStoredAppointment(record.appointment)
+      return appointment === null ? state : commit(state, { appointments: [...state.appointments, appointment] })
+    }
+    case 'gate': {
+      const gate = normalizeStoredGate(record.gate)
+      return gate === null ? state : commit(state, { gates: [...state.gates, gate] })
+    }
+    case 'evidence': {
+      const evidence = normalizeStoredEvidence(record.evidence)
+      return evidence === null ? state : commit(state, { evidence: [...state.evidence, evidence] })
+    }
+    case 'close': {
+      const closure = normalizeStoredClosure(record.closure)
+      return closure === null ? state : commit(state, { closure })
+    }
+    default:
+      return state
+  }
+}
+
+/**
+ * Apply one committed session event to the board state. The board derives from
+ * two DSH event families only, so resume, fork, and compaction stay safe:
+ * - `tool/result` — a Lead-side `sansheng_*` tool returned one record envelope;
+ * - `user/message` — a teammate published one marked record to the Lead.
+ * Unknown events and malformed payloads are ignored: replay must stay total so
+ * a projection failure can never hide the rest of the board.
  *
  * @param {object} state Previous board state.
  * @param {{type?: string, data?: unknown}} event Committed session event.
- * @returns {object} Next board state (new object per applied event).
+ * @returns {object} Next board state (new object per applied record).
  */
 export function foldEvent(state, event) {
   const type = event?.type
-  const data = event?.data
-  if (typeof type !== 'string' || type === '' || !data || typeof data !== 'object') return state
-
-  if (type === 'sansheng/mode') {
-    return commit(state, { active: data.active === true })
+  if (type === 'tool/result') {
+    if (event.data?.message?.isError === true) return state
+    const content = event.data?.message?.content
+    if (!Array.isArray(content)) return state
+    for (const block of content) {
+      if (block?.type !== 'text' || typeof block.text !== 'string') continue
+      const record = parseRecordText(block.text)
+      if (record !== null) return applyRecord(state, record)
+    }
+    return state
   }
-  if (type === 'sansheng/edict') {
-    const edict = normalizeStoredEdict(data.edict)
-    return edict === null ? state : commit(state, { edict })
-  }
-  if (type === 'sansheng/appoint') {
-    const appointment = normalizeStoredAppointment(data.appointment)
-    return appointment === null ? state : commit(state, { appointments: [...state.appointments, appointment] })
-  }
-  if (type === 'sansheng/gate') {
-    const gate = normalizeStoredGate(data.gate)
-    return gate === null ? state : commit(state, { gates: [...state.gates, gate] })
-  }
-  if (type === 'sansheng/evidence') {
-    const evidence = normalizeStoredEvidence(data.evidence)
-    return evidence === null ? state : commit(state, { evidence: [...state.evidence, evidence] })
-  }
-  if (type === 'sansheng/close') {
-    const closure = normalizeStoredClosure(data.closure)
-    return closure === null ? state : commit(state, { closure })
+  if (type === 'user/message') {
+    const content = event.data?.content
+    if (!Array.isArray(content)) return state
+    for (const block of content) {
+      if (block?.type !== 'text' || typeof block.text !== 'string') continue
+      const record = parseRecordText(block.text)
+      if (record !== null) return applyRecord(state, record)
+    }
   }
   return state
 }

@@ -1,10 +1,13 @@
 /**
  * 三省六部 (Sān Shěng Liù Bù) mode — host half.
  *
- * The board lives in the **Lead session's append-only event log** (`sansheng/*`
- * events folded by the `sansheng` session projection). No shared directory,
- * temp board, or writable coordination file is involved: the session log is
- * the only source of truth, and the browser half renders the projection.
+ * The board lives in the **Lead session's append-only event log**, folded by
+ * the `sansheng` session projection from two replay-safe event families only:
+ * `tool/result` for Lead-side records, and `user/message` for teammate records
+ * that tools auto-publish to the Lead as marked Team messages. No shared
+ * directory, temp board, or writable coordination file is involved, and no
+ * custom session event type is ever appended — an unknown non-ignorable type
+ * would make the harness refuse to reconstruct the session after restart.
  *
  * Hard gates enforced here (not merely advised by a prompt):
  * - only the Lead drafts the edict and appoints 六部;
@@ -26,6 +29,8 @@ import {
   createEmptyState,
   foldEvent,
   latestGate,
+  serializeMessageRecord,
+  serializeRecord,
   summarizeBoard,
   validateAppointInput,
   validateCloseInput,
@@ -214,19 +219,31 @@ export function apply(ctx, config = {}) {
   }
 
   /**
-   * Append one board event to the Lead session log and flush it.
-   * @param {object} agent Calling Agent.
-   * @param {string} type `sansheng/*` event type.
-   * @param {object} data Event payload.
-   * @returns {Promise<void>} Resolves after the durable flush attempt.
+   * Publish one teammate-side record into the Lead session log.
+   *
+   * A plugin installed into a profile cannot append an ignorable plugin record
+   * to the host's session log: the only writer for that is a host-owned module
+   * copy it cannot import. So teammate records travel as a normal Team message.
+   * DSH records such delivery as a `user/message` with a Team source — a known,
+   * replay-safe event type — and the Lead board projection folds the marked
+   * envelope out of it. Lead-side records need no extra action: their own tool
+   * result (`tool/result`) already carries the envelope.
+   *
+   * @param {object} agent Calling teammate Agent.
+   * @param {string} text Marked record text.
+   * @param {AbortSignal|undefined} signal Caller cancellation.
+   * @returns {Promise<void>} Resolves after the Lead inbox accepts the message.
    */
-  async function record(agent, type, data) {
-    const { leadSession } = memberOf(agent)
-    leadSession.append(type, data)
-    const sessions = service('sessions')
-    if (sessions !== undefined && typeof sessions.flush === 'function') {
-      await sessions.flush(leadSession)
+  async function publishToLead(agent, text, signal) {
+    const teams = service('agentTeams')
+    if (teams === undefined || typeof teams.sendMessage !== 'function') {
+      throw new Error('三省六部 needs the Agent Teams runtime to publish teammate records')
     }
+    await teams.sendMessage(agent, {
+      target: 'lead',
+      content: [{ type: 'text', text }],
+      signal,
+    })
   }
 
   /* ---------------------------------------------------------------- */
@@ -311,9 +328,8 @@ export function apply(ctx, config = {}) {
       }
       const active = action === 'enter'
       const state = boardOf(agent)
-      if (state.active === active) return JSON.stringify({ active, changed: false })
-      await record(agent, 'sansheng/mode', { active })
-      return JSON.stringify({ active, changed: true })
+      if (state.active === active) return serializeRecord('mode', { active, changed: false })
+      return serializeRecord('mode', { active, changed: true })
     },
   })
 
@@ -364,13 +380,7 @@ export function apply(ctx, config = {}) {
       const normalized = validateEdictInput(args)
       const revision = (state.edict === null ? 0 : state.edict.revision) + 1
       const edict = { revision, ...normalized, createdAt: Date.now() }
-      await record(agent, 'sansheng/edict', { edict })
-      return JSON.stringify({
-        revision,
-        tier: edict.tier,
-        rosterCap: edict.rosterCap,
-        departments: edict.departments,
-      })
+      return serializeRecord('edict', { edict })
     },
   })
 
@@ -427,13 +437,7 @@ export function apply(ctx, config = {}) {
         writeScopes: normalized.writeScopes,
         createdAt: Date.now(),
       }
-      await record(agent, 'sansheng/appoint', { appointment })
-      return JSON.stringify({
-        id: appointment.id,
-        member: appointment.member,
-        department: appointment.department,
-        writeScopes: appointment.writeScopes,
-      })
+      return serializeRecord('appoint', { appointment })
     },
   })
 
@@ -470,14 +474,12 @@ export function apply(ctx, config = {}) {
         summary: normalized.summary,
         createdAt: Date.now(),
       }
-      await record(agent, 'sansheng/gate', { gate })
-      return JSON.stringify({
-        id: gate.id,
-        kind: gate.kind,
-        verdict: gate.verdict,
-        reviewer: gate.reviewer,
-        defects: gate.defects,
-      })
+      // A teammate verdict must reach the Lead session log to become durable
+      // board state; its own tool result is recorded in the child session only.
+      if (caller.role === 'teammate') {
+        await publishToLead(agent, serializeMessageRecord('gate', { gate }), exec.signal)
+      }
+      return serializeRecord('gate', { gate })
     },
   })
 
@@ -518,13 +520,11 @@ export function apply(ctx, config = {}) {
         sourceSessionId: normalized.sourceSessionId ?? sessionIdOf(agent),
         createdAt: Date.now(),
       }
-      await record(agent, 'sansheng/evidence', { evidence })
-      return JSON.stringify({
-        id: evidence.id,
-        taskId: evidence.taskId,
-        submittedBy: evidence.submittedBy,
-        exitCode: evidence.exitCode,
-      })
+      // Same durable path as a teammate verdict: publish it into the Lead log.
+      if (caller.role === 'teammate') {
+        await publishToLead(agent, serializeMessageRecord('evidence', { evidence }), exec.signal)
+      }
+      return serializeRecord('evidence', { evidence })
     },
   })
 
@@ -574,15 +574,7 @@ export function apply(ctx, config = {}) {
         closedBy: caller.name,
         createdAt: Date.now(),
       }
-      await record(agent, 'sansheng/close', { closure })
-      return JSON.stringify({
-        closureId: closure.id,
-        conclusions: closure.conclusions,
-        deliverables: closure.deliverables,
-        unknowns: closure.unknowns,
-        next: closure.next,
-        evidenceCount: state.evidence.length,
-      })
+      return serializeRecord('close', { closure, evidenceCount: state.evidence.length })
     },
   })
 

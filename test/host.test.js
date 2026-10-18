@@ -4,18 +4,19 @@ import test from 'node:test'
 import { apply } from '../index.js'
 
 /**
- * Build a minimal Cordis-like context: enough surface for apply() to register
- * its projection, prompt section, and tools, plus a durable session log that
- * the fake projection can fold.
+ * Minimal Cordis-like context: enough surface for apply() to register its
+ * projection, prompt section, and tools, plus a durable Lead session log that
+ * the fake projection folds.
+ *
+ * The harness also emulates the two runtime behaviours the plugin relies on:
+ * - a Lead tool result is committed as `tool/result`;
+ * - a teammate record published with `sendMessage` arrives as `user/message`.
  */
 function harness({ teammates = [], tasks = [] } = {}) {
   const leader = {
     session: {
       header: { id: 'sess-lead' },
       events: [],
-      append(type, data) {
-        this.events.push({ type, data })
-      },
     },
   }
   let projection
@@ -36,6 +37,16 @@ function harness({ teammates = [], tasks = [] } = {}) {
     },
     listTasks() {
       return tasks
+    },
+    async sendMessage(caller, request) {
+      leader.session.events.push({
+        type: 'user/message',
+        data: {
+          source: { kind: 'agent-message', senderName: caller?.session?.header?.id },
+          content: request.content,
+        },
+      })
+      return { messageId: 'msg-1' }
     },
   }
 
@@ -78,28 +89,47 @@ function harness({ teammates = [], tasks = [] } = {}) {
 
   apply(ctx, {})
 
-  /** Create an exact live teammate Agent with Team membership. */
+  function tool(name) {
+    const found = tools.find((entry) => entry.name === name)
+    assert.ok(found !== undefined, `missing tool ${name}`)
+    return found
+  }
+
+  /**
+   * Execute one tool exactly as the Agent loop would expose it, then commit the
+   * resulting event the runtime would write: a `tool/result` for a Lead call,
+   * a `user/message` for a teammate record published to the Lead.
+   */
+  async function dispatch(name, args, agent) {
+    const result = await tool(name).execute(args, { agent })
+    if (agent === leader && typeof result === 'string' && result.startsWith('{"sansheng"')) {
+      leader.session.events.push({
+        type: 'tool/result',
+        data: {
+          message: {
+            role: 'tool',
+            toolCallId: 'call-test',
+            isError: false,
+            content: [{ type: 'text', text: result }],
+          },
+        },
+      })
+    }
+    return result
+  }
+
   function teammate(name) {
     const agent = {
       session: {
         header: { id: `sess-${name}` },
         events: [],
-        append(type, data) {
-          this.events.push({ type, data })
-        },
       },
     }
     membership.set(agent, { role: 'teammate', name, root: leader })
     return agent
   }
 
-  return { ctx, leader, teammate, projection, tools, sections }
-}
-
-function tool(tools, name) {
-  const found = tools.find((entry) => entry.name === name)
-  assert.ok(found !== undefined, `missing tool ${name}`)
-  return found
+  return { ctx, leader, teammate, projection, tools, sections, dispatch, tool }
 }
 
 test('apply registers the project board, prompt section, and seven tools', () => {
@@ -125,62 +155,61 @@ test('apply registers the project board, prompt section, and seven tools', () =>
   }
 })
 
-test('mode, edict, gate, appointment, evidence and close flow records to the Lead log', async () => {
+test('mode, edict, gates, appointment, evidence and close flow through the Lead log', async () => {
   const h = harness({ teammates: ['menxia', 'gongbu'], tasks: [{ id: 'task-1', status: 'completed' }] })
   const reviewer = h.teammate('menxia')
-  const worker = h.teammate('gongbu')
   const lead = h.leader
 
-  const mode = tool(h.tools, 'sansheng_mode')
-  const edictTool = tool(h.tools, 'sansheng_edict')
-  const appoint = tool(h.tools, 'sansheng_appoint')
-  const gate = tool(h.tools, 'sansheng_gate')
-  const evidence = tool(h.tools, 'sansheng_evidence')
-  const close = tool(h.tools, 'sansheng_close')
-
-  const before = JSON.parse(await mode.execute({ action: 'status' }, { agent: lead }))
+  const before = JSON.parse(await h.dispatch('sansheng_mode', { action: 'status' }, lead))
   assert.equal(before.active, false)
 
-  await mode.execute({ action: 'enter' }, { agent: lead })
-  assert.equal(lead.session.events.filter((event) => event.type === 'sansheng/mode').length, 1)
+  await h.dispatch('sansheng_mode', { action: 'enter' }, lead)
+  assert.equal(h.leader.session.events.filter((event) => event.type === 'tool/result').length, 1)
 
-  await edictTool.execute({
+  await h.dispatch('sansheng_edict', {
     goal: 'ship the mode',
     acceptance: ['tests pass'],
     tier: 'medium',
     roster_cap: 5,
     departments: ['工部', '刑部'],
-  }, { agent: lead })
+  }, lead)
 
   await assert.rejects(
-    appoint.execute({ member: 'gongbu', department: '工部' }, { agent: lead }),
+    h.dispatch('sansheng_appoint', { member: 'gongbu', department: '工部' }, lead),
     /PLAN_GATE_NOT_PASSED/,
   )
 
-  await gate.execute({ kind: 'plan', verdict: 'pass', summary: 'plan is decision-complete' }, { agent: reviewer })
-  await appoint.execute({ member: 'gongbu', department: '工部', write_scopes: ['src'] }, { agent: lead })
-  await evidence.execute({ task_id: 'task-1', command: 'npm test', exit_code: 0 }, { agent: reviewer })
-  await gate.execute({ kind: 'result', verdict: 'pass' }, { agent: reviewer })
+  await h.dispatch('sansheng_gate', { kind: 'plan', verdict: 'pass', summary: 'decision-complete' }, reviewer)
+  await h.dispatch('sansheng_appoint', { member: 'gongbu', department: '工部', write_scopes: ['src'] }, lead)
+  await h.dispatch('sansheng_evidence', { task_id: 'task-1', command: 'npm test', exit_code: 0 }, reviewer)
+  await h.dispatch('sansheng_gate', { kind: 'result', verdict: 'pass' }, reviewer)
 
-  const closing = JSON.parse(await close.execute({
+  const closing = JSON.parse(await h.dispatch('sansheng_close', {
     conclusions: ['mode implemented'],
     deliverables: ['index.js'],
     unknowns: ['none'],
-  }, { agent: lead }))
-  assert.deepEqual(closing.conclusions, ['mode implemented'])
-  assert.equal(closing.evidenceCount, 1)
-  assert.equal(closing.unknowns[0], 'none')
+  }, lead))
+  assert.equal(closing.op, 'close')
+  assert.deepEqual(closing.closure.conclusions, ['mode implemented'])
+  assert.equal(closing.closure.unknowns[0], 'none')
 
-  const events = lead.session.events.map((event) => event.type)
-  assert.deepEqual(events, [
-    'sansheng/mode',
-    'sansheng/edict',
-    'sansheng/gate',
-    'sansheng/appoint',
-    'sansheng/evidence',
-    'sansheng/gate',
-    'sansheng/close',
+  const eventTypes = lead.session.events.map((event) => event.type)
+  assert.deepEqual(eventTypes, [
+    'tool/result', // mode enter
+    'tool/result', // edict
+    'user/message', // menxia plan gate (reject/pass record)
+    'tool/result', // appointment
+    'user/message', // menxia evidence
+    'user/message', // menxia result gate
+    'tool/result', // close
   ])
+
+  const state = lead.session.events.reduce(
+    (current, event) => h.projection.apply(current, event),
+    h.projection.init(),
+  )
+  assert.equal(state.active, true)
+  assert.equal(state.closure.closedBy, 'lead')
   assert.ok(h.sections[0].text({ agent: lead }).includes('Current board state'))
 })
 
@@ -195,22 +224,40 @@ test('the Lead cannot self-review and an appointed member cannot review', async 
   const worker = h.teammate('gongbu')
   const lead = h.leader
 
-  await tool(h.tools, 'sansheng_mode').execute({ action: 'enter' }, { agent: lead })
-  await tool(h.tools, 'sansheng_edict').execute({
+  await h.dispatch('sansheng_mode', { action: 'enter' }, lead)
+  await h.dispatch('sansheng_edict', {
     goal: 'g',
     acceptance: ['a'],
     tier: 'medium',
     roster_cap: 5,
-  }, { agent: lead })
+  }, lead)
 
   await assert.rejects(
-    tool(h.tools, 'sansheng_gate').execute({ kind: 'plan', verdict: 'pass' }, { agent: lead }),
+    h.dispatch('sansheng_gate', { kind: 'plan', verdict: 'pass' }, lead),
     /REVIEWER_MUST_BE_TEAMMATE/,
   )
-  await tool(h.tools, 'sansheng_gate').execute({ kind: 'plan', verdict: 'pass' }, { agent: reviewer })
-  await tool(h.tools, 'sansheng_appoint').execute({ member: 'gongbu', department: '工部' }, { agent: lead })
+  await h.dispatch('sansheng_gate', { kind: 'plan', verdict: 'pass' }, reviewer)
+  await h.dispatch('sansheng_appoint', { member: 'gongbu', department: '工部' }, lead)
   await assert.rejects(
-    tool(h.tools, 'sansheng_gate').execute({ kind: 'plan', verdict: 'reject', defects: ['x'] }, { agent: worker }),
+    h.dispatch('sansheng_gate', { kind: 'plan', verdict: 'reject', defects: ['x'] }, worker),
     /SELF_REVIEW_NOT_ALLOWED/,
   )
+})
+
+test('teammate records reach the board only through the Lead message log', async () => {
+  const h = harness({ teammates: ['menxia'] })
+  const reviewer = h.teammate('menxia')
+  const lead = h.leader
+
+  await h.dispatch('sansheng_mode', { action: 'enter' }, lead)
+  await h.dispatch('sansheng_edict', { goal: 'g', acceptance: ['a'], tier: 'medium', roster_cap: 5 }, lead)
+  await h.dispatch('sansheng_gate', { kind: 'plan', verdict: 'reject', defects: ['no command'] }, reviewer)
+
+  const message = lead.session.events.find((event) => event.type === 'user/message')
+  assert.ok(message !== undefined)
+  assert.ok(message.data.content[0].text.includes('SANS_RECORD_V1'))
+
+  const board = JSON.parse(await h.dispatch('sansheng_board', {}, lead))
+  assert.equal(board.planGate.verdict, 'reject')
+  assert.deepEqual(board.planGate.defects, ['no command'])
 })

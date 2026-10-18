@@ -115,11 +115,16 @@ It reads two session projections — `sansheng` and `agentTeam` — and stores n
 
 ## State and persistence
 
-Six append-only events, all written to the **Lead session**:
+The board **never writes a custom session event type**. DSH's session format only lets the host append ignorable experimental records; an unknown non-ignorable type makes the whole session refuse to reconstruct after restart ("unknown to this harness and not marked ignorable"). Real-machine verification caught this in an earlier build, and it is fixed.
 
-`sansheng/mode`, `sansheng/edict`, `sansheng/appoint`, `sansheng/gate`, `sansheng/evidence`, `sansheng/close`.
+Board state therefore travels only through events DSH already knows and can replay:
 
-They never enter model history and are unaffected by compaction. Resume and fork rebuild the board by folding the log. **No `.team/`, no `/tmp` board, no coordination file.**
+| Source | Event type | Payload |
+|---|---|---|
+| the Lead's own `sansheng_*` tool calls | `tool/result` | the tool's record envelope (`{"sansheng":1,"op":...}`) |
+| 门下省/六部 teammate tool calls | `user/message` (Team message) | the tool **auto-publishes** the record to the Lead as a Team message; the `SANS_RECORD_V1` marker lets the projection find it among ordinary prose |
+
+The projection folds only those two families, so **restart, resume, fork, and compaction are safe**, and no file is involved. **No `.team/`, no `/tmp` board, no coordination file.**
 
 ## Relationship to Agent Teams
 

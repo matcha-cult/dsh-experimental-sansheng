@@ -144,20 +144,18 @@ dsh plugin --profile web add /absolute/path/to/dsh-experimental-sansheng
 
 ## 状态与持久化
 
-六个只追加的日志事件，全部写在 **Lead 会话**：
+看板**不写自定义会话事件类型**。DSH 的会话格式只允许宿主自己写入可忽略（ignorable）的实验性事件；第三方插件写未知类型会导致**重启/恢复时整个会话被拒绝解释**（"unknown to this harness and not marked ignorable"）。这是本项目在真机验证中抓到并修掉的问题。
 
-| 事件 | 语义 |
-|---|---|
-| `sansheng/mode` | 模式开关（整值替换） |
-| `sansheng/edict` | 制敕（整值替换，revision 递增） |
-| `sansheng/appoint` | 一条任命 |
-| `sansheng/gate` | 一次门禁判定（同一门以后者为准） |
-| `sansheng/evidence` | 一条证据（引用执行者会话，不复制大输出） |
-| `sansheng/close` | 结案回奏 |
+因此状态全部走 DSH 已知、可回放的事件通道：
 
-这些事件**不进入模型历史**，只参与投影折叠；压缩（compaction）不会丢失它们。恢复与 fork 后，看板由日志重建。
+| 来源 | 事件类型 | 携带内容 |
+|---|---|---|
+| Lead 自己的 `sansheng_*` 工具调用 | `tool/result` | 工具返回的记录信封（`{"sansheng":1,"op":...}`） |
+| 门下省/六部成员的工具调用 | `user/message`（Team 消息） | 成员工具会把记录**自动以 Team 消息发给 Lead**；标记 `SANS_RECORD_V1` 让投影把它从普通消息中识别出来 |
 
-**没有 `.team/`、没有 `/tmp` 白板、没有可被其他进程改写的任务文件。** 想验证这一点：删掉工作区里所有临时文件，重启会话，看板状态应完全一致。
+看板投影只折叠这两类事件，因此**重启、恢复、fork、压缩都安全**，且不依赖任何文件。
+
+**没有 `.team/`、没有 `/tmp` 白板、没有可被其他进程改写的任务文件。** 想验证这一点：重启 DSH 进程后重新打开会话，看板状态应完全一致（本项目的验收项之一）。
 
 ## 与 Agent Teams 的关系
 
