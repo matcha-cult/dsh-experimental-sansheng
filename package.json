@@ -12,8 +12,8 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "README.en.md",
     "README.md",
-    "README.zh-CN.md",
     "client.js",
     "compatibility.json",
     "cordis.patch.yml",
