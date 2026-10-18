@@ -85,21 +85,45 @@ Two entry points:
 
 Every mutating call echoes the `revision` last read from `sansheng_board` as `expected_revision`; a stale value fails instead of letting a late verdict win.
 
-```text
-1. 政事堂 (Lead)       sansheng_edict { ..., expected_revision }
-2. 门下省 (teammate)   sansheng_gate { kind:"plan", verdict:"pass", checked:[...], expected_revision }
-3. 尚书省 (Lead)       spawn_teammate → sansheng_appoint → team_task_create
-4. 六部                team_task_* / file work
-5. 刑部                sansheng_evidence { task_id, command, exit_code, digest, excerpt, expected_revision }
-6. 门下省              sansheng_gate { kind:"result", verdict:"pass", checked, reviews:[one per completed task], expected_revision }
-7. 政事堂              sansheng_close { ..., expected_revision } → report to the user
+### How it runs
+
+The mode separates **decision, review and execution**, then turns good intentions into tool-enforced gates:
+
+- **政事堂 (Lead)**: drafts the edict, dispatches, closes; cannot review itself and does not execute ministry work;
+- **门下省 (independent teammate)**: reviews the plan and the result; the result reviewer must differ from the plan reviewer and may not own a task;
+- **六部**: execute by department; **刑部** records reproducible evidence, and a completed task without evidence cannot close;
+- every mutation carries `expected_revision`; a late verdict fails with `STALE_REVISION` instead of overwriting a newer decision.
+
+```mermaid
+flowchart TD
+    U(["User / 皇上"]) --> ENTRY{"Entry"}
+    ENTRY -->|"New task: 三省六部 preset"| LEAD["政事堂 · Lead"]
+    ENTRY -->|"Existing session: sansheng_mode enter"| LEAD
+    LEAD -->|"sansheng_edict<br/>goal · acceptance · tier · roster · departments · workstreams"| EDICT[["Edict drafted"]]
+    EDICT -->|"spawn_teammate / send_message"| REVIEW["门下省 · independent reviewer"]
+    REVIEW -->|"sansheng_gate kind=plan"| PG{"Plan gate"}
+    PG -->|"reject · defects"| EDICT
+    PG -->|"pass"| LARGE{"tier = large?"}
+    LARGE -->|"yes"| HUMAN{"User /sansheng approve"}
+    HUMAN -->|"reject"| EDICT
+    HUMAN -->|"approve"| DISPATCH["尚书省 · dispatch<br/>sansheng_appoint · team_task_create"]
+    LARGE -->|"no"| DISPATCH
+    DISPATCH --> EXEC["六部 execute<br/>team_task_* · file changes"]
+    EXEC -->|"task completed"| EVID["刑部 · sansheng_evidence<br/>command · exit_code · digest · excerpt · workstream_id"]
+    EVID --> RG{"Result gate"}
+    RG -->|"reject · new evidence"| EXEC
+    RG -->|"pass · different reviewer + per-task reviews"| CLOSE["政事堂 · sansheng_close"]
+    CLOSE --> DONE(["Report to 皇上 · closed"])
+    LEAD -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["Abandon explicitly"])
 ```
+
+> A rejected plan must be re-drafted; a rejected result needs fresh evidence. Large-tier work needs a real user `/sansheng approve` before dispatch. Leaving an open case requires closing it or an explicit `abandon_reason`.
 
 Hard invariants since 0.2.0: stale revisions are rejected; a rejected plan must be re-drafted and a rejected result needs new evidence; plan and result gates need different reviewers, and reviewers may not own a shared task; passes cite `checked` items; evidence only covers completed tasks and needs a hex digest plus excerpt; leaving an open case requires `abandon_reason`; closing rejects unfinished shared tasks.
 
 Since 0.2.2: large-tier appointments need a real user `/sansheng approve` recorded after the plan gate (a model claim is not enough); `/sansheng reject` blocks dispatch until the plan is revised and re-reviewed. Board alerts escalate a stalled board at 30 / 60 / 120 minutes (inspect → interrupt/reassign or report → user decides).
 
-Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The board's 详细历史 tab keeps a bounded case-level log of message text, tool arguments/results and teammate inbox deliveries, filterable and expandable, with assistant reasoning deliberately excluded. Member-internal trajectories are not copied into the board; open the member session from the native Agent Team panel or the sidebar for the original Chat / Trajectory view. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
+Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {action:"status"}`. The board's 详细历史 tab keeps a bounded case-level log of message text, tool arguments/results and teammate inbox deliveries, filterable and expandable, with assistant reasoning deliberately excluded. Member-internal trajectories are not copied into the board; open the member session from the native Agent Team panel or the sidebar for the original Chat / Trajectory view. The header **三省六部** action opens a full board drawer with 总览 / 任务 / 审议 / 证据 / 时间线 / 详细历史 tabs; it auto-opens when the mode becomes active. The timeline keeps the last 200 mode/edict/appointment/gate/evidence/close records plus rejected (`denied`) tool calls.
 
 ## Tools
 

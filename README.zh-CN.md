@@ -104,15 +104,39 @@ dsh plugin --profile web add dsh-experimental-sansheng
 
 进入后按顺序（**每次修改前先从 `sansheng_board` 读 `revision`，作为 `expected_revision` 传入**）：
 
-```text
-1. 政事堂（Lead）拟旨     sansheng_edict { ..., expected_revision }
-2. 门下省（独立 teammate）  sansheng_gate { kind:"plan", verdict:"pass", checked:[...], expected_revision }
-3. 尚书省（Lead）派工     spawn_teammate → sansheng_appoint → team_task_create
-4. 六部执行               team_task_* / 文件写入
-5. 刑部取证               sansheng_evidence { task_id, command, exit_code, digest, excerpt, expected_revision }
-6. 门下省覆核             sansheng_gate { kind:"result", verdict:"pass", checked, reviews:[每个已完成任务], expected_revision }
-7. 政事堂结案             sansheng_close { ..., expected_revision } → 向用户回奏
+### 运行机制
+
+核心是**决策、复核、执行分离**，再用工具门把“自觉”变成“拒绝”：
+
+- **政事堂（Lead）**：拟旨、派工、结案；不能自审，也不能替六部执行；
+- **门下省（独立 teammate）**：审计划、审成果；必须换人复审，且不能是任务执行者；
+- **六部**：按部门执行；**刑部**登记可复现证据，没有证据的完成项不能结案；
+- 所有写操作都带 `expected_revision`，迟到的评审会被 `STALE_REVISION` 拒绝，不会覆盖新结论。
+
+```mermaid
+flowchart TD
+    U(["皇上 / 用户"]) --> ENTRY{"入口"}
+    ENTRY -->|"新任务选「三省六部」预设"| LEAD["政事堂 · Lead"]
+    ENTRY -->|"已有会话：sansheng_mode enter"| LEAD
+    LEAD -->|"sansheng_edict<br/>目标 · 验收 · 档位 · 编制 · 部门 · workstreams"| EDICT[["制敕已立"]]
+    EDICT -->|"spawn_teammate / send_message"| REVIEW["门下省 · 独立评审"]
+    REVIEW -->|"sansheng_gate kind=plan"| PG{"计划门"}
+    PG -->|"reject · 封驳 + defects"| EDICT
+    PG -->|"pass"| LARGE{"tier = large?"}
+    LARGE -->|"是"| HUMAN{"用户 /sansheng approve"}
+    HUMAN -->|"reject"| EDICT
+    HUMAN -->|"approve"| DISPATCH["尚书省 · 派工<br/>sansheng_appoint · team_task_create"]
+    LARGE -->|"否"| DISPATCH
+    DISPATCH --> EXEC["六部执行<br/>team_task_* · 文件改动"]
+    EXEC -->|"任务 completed"| EVID["刑部 · sansheng_evidence<br/>command · exit_code · digest · excerpt · workstream_id"]
+    EVID --> RG{"成果门"}
+    RG -->|"reject · 补新证据"| EXEC
+    RG -->|"pass · 另一评审者 + 逐任务 reviews"| CLOSE["政事堂 · sansheng_close"]
+    CLOSE --> DONE(["回奏皇上 · 结案"])
+    LEAD -.->|"sansheng_mode leave + abandon_reason"| ABANDON(["显式放弃"])
 ```
+
+> 计划被封驳 → 改旨重审；成果被封驳 → 补新证据再审。large 档必须由用户 `/sansheng approve` 后才能派工；离开模式必须先结案或显式放弃。
 
 硬约束（0.2.0 起）：
 
@@ -126,7 +150,7 @@ dsh plugin --profile web add dsh-experimental-sansheng
 - **御批（large 任务）**：计划门通过后，用户需在 Lead 会话运行 `/sansheng approve [备注]`（或 `/sansheng reject [备注]`）才能任命六部；模型自称用户同意无效，御批来自会话日志里的真实 `command/run` 事件。
 - **停滞升级**：看板 30 分钟无新记录→先查停滞成员；60 分钟→interrupt/reassign 或上奏；120 分钟→必须由用户决定，不得自行放宽验收。
 
-任意成员都可以随时 `sansheng_board` 读当前看板；Lead 可以 `sansheng_mode {action:"status"}` 查看摘要。看板的「详细历史」页签保留案卷级事件历史：消息正文、工具调用参数/结果、团队来信，按时间排列、可筛选可展开（不含模型思考，最多保留最近 240 条 / 120k 字符）。成员内部轨迹不复制进看板，请从官方 Agent Team 面板或侧栏的成员会话打开 DSH 原生 Chat / Trajectory。会话页头的「三省六部」按钮会打开完整看板抽屉：**总览 / 任务 / 审议 / 证据 / 时间线**五个页签；模式激活时会自动打开。时间线包含被拒绝的调用（denied）与所有模式/拟旨/任命/审议/取证/结案记录，模式激活后会保留最近 200 条。
+任意成员都可以随时 `sansheng_board` 读当前看板；Lead 可以 `sansheng_mode {action:"status"}` 查看摘要。看板的「详细历史」页签保留案卷级事件历史：消息正文、工具调用参数/结果、团队来信，按时间排列、可筛选可展开（不含模型思考，最多保留最近 240 条 / 120k 字符）。成员内部轨迹不复制进看板，请从官方 Agent Team 面板或侧栏的成员会话打开 DSH 原生 Chat / Trajectory。会话页头的「三省六部」按钮会打开完整看板抽屉：**总览 / 任务 / 审议 / 证据 / 时间线 / 详细历史**六个页签；模式激活时会自动打开。时间线包含被拒绝的调用（denied）与所有模式/拟旨/任命/审议/取证/结案记录，模式激活后会保留最近 200 条。
 
 ## 工具
 
