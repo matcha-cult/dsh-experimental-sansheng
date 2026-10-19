@@ -43,6 +43,9 @@ export const RECORD_OPS = Object.freeze(['mode', 'edict', 'appoint', 'gate', 'au
 /** Bounded audit history kept on the board for the timeline view. */
 export const MAX_HISTORY = 200
 
+/** Archived sequential cases retained on one board. */
+export const MAX_CASES = 20
+
 /** Rejects on one gate before the case must be escalated to the user. */
 export const MAX_GATE_REJECTS = 3
 
@@ -131,6 +134,7 @@ export function createInitialState(header, presetId) {
   const state = createEmptyState()
   if (typeof presetId === 'string' && presetId !== '' && header?.agentPreset === presetId) {
     state.active = true
+    state.caseId = 1
   }
   return state
 }
@@ -147,6 +151,8 @@ export function createEmptyState() {
     closure: null,
     abandoned: null,
     approvals: [],
+    caseId: 0,
+    cases: [],
     history: [],
     updatedAt: null,
     revision: 0,
@@ -233,6 +239,27 @@ function recordTime(record, eventTime, fallback) {
  * @param {number|null} [eventTime] Committed event timestamp for the timeline.
  * @returns {object} Next board state.
  */
+/**
+ * Archive the current sequential case as a compact summary. The full event log
+ * remains the audit source; this summary only powers the board's case history.
+ * @param {object} state Board state ending a case.
+ * @returns {Array<object>} Bounded archived case list.
+ */
+function archiveCurrentCase(state) {
+  if (state.edict === null && state.closure === null && state.abandoned === null) return state.cases ?? []
+  const entry = {
+    caseId: Number.isInteger(state.caseId) ? state.caseId : 0,
+    goal: state.edict?.goal ?? null,
+    tier: state.edict?.tier ?? null,
+    outcome: state.closure !== null ? 'closed' : (state.abandoned !== null && state.abandoned !== undefined ? 'abandoned' : 'open'),
+    conclusions: state.closure?.conclusions ?? [],
+    abandonedReason: state.abandoned?.reason ?? null,
+    revision: state.revision,
+    at: state.updatedAt,
+  }
+  return [...(state.cases ?? []), entry].slice(-MAX_CASES)
+}
+
 export function applyRecord(state, record, eventTime = null) {
   if (record === null || typeof record !== 'object') return state
   const { revision, stale } = recordRevision(state, record)
@@ -241,9 +268,34 @@ export function applyRecord(state, record, eventTime = null) {
     case 'mode': {
       if (typeof record.active !== 'boolean') return state
       if (record.active === true) {
+        const terminal = state.closure !== null || (state.abandoned !== null && state.abandoned !== undefined)
+        if (terminal) {
+          const cases = archiveCurrentCase(state)
+          const nextCaseId = (Number.isInteger(state.caseId) ? state.caseId : 0) + 1
+          return withHistory(
+            commit(state, {
+              active: true,
+              abandoned: null,
+              closure: null,
+              edict: null,
+              appointments: [],
+              gates: [],
+              evidence: [],
+              audits: [],
+              approvals: [],
+              caseId: nextCaseId,
+              cases,
+            }, revision),
+            { op: 'mode', rev: revision, at: recordTime(record, eventTime, null), by: record.by ?? 'lead', active: true, caseId: nextCaseId, newCase: true },
+          )
+        }
         return withHistory(
-          commit(state, { active: true, abandoned: null }, revision),
-          { op: 'mode', rev: revision, at: recordTime(record, eventTime, null), by: record.by ?? 'lead', active: true },
+          commit(state, {
+            active: true,
+            abandoned: null,
+            caseId: Number.isInteger(state.caseId) && state.caseId > 0 ? state.caseId : 1,
+          }, revision),
+          { op: 'mode', rev: revision, at: recordTime(record, eventTime, null), by: record.by ?? 'lead', active: true, caseId: Number.isInteger(state.caseId) && state.caseId > 0 ? state.caseId : 1 },
         )
       }
       const patch = { active: false }
@@ -366,7 +418,11 @@ export function foldEvent(state, event, presetId) {
   if (type === 'agent-preset/selected') {
     const selected = event?.data?.agentPreset
     if (typeof selected !== 'string') return state
-    return commit(state, { active: typeof presetId === 'string' && presetId !== '' && selected === presetId })
+    const active = typeof presetId === 'string' && presetId !== '' && selected === presetId
+    if (active && (!Number.isInteger(state.caseId) || state.caseId < 1)) {
+      return commit(state, { active: true, caseId: 1 })
+    }
+    return commit(state, { active })
   }
   const eventTime = Number.isInteger(event?.time) && event.time > 0 ? event.time : null
   if (type === 'tool/result') {
@@ -588,6 +644,17 @@ export function summarizeBoard(state, tasks = []) {
   return {
     active: state.active,
     phase: casePhase(state),
+    caseId: state.caseId,
+    cases: (state.cases ?? []).map((entry) => ({
+      caseId: entry.caseId,
+      goal: entry.goal,
+      tier: entry.tier,
+      outcome: entry.outcome,
+      conclusions: entry.conclusions,
+      abandonedReason: entry.abandonedReason,
+      revision: entry.revision,
+      at: entry.at,
+    })),
     revision: state.revision,
     updatedAt: state.updatedAt,
     abandoned: state.abandoned,
@@ -796,9 +863,8 @@ export function validateModeAction(state, input) {
   if (action === 'status') return { action, abandonReason: null }
   assertExpectedRevision(state, input)
   if (action === 'enter') {
-    if (state.closure !== null) {
-      fail('CASE_ALREADY_CLOSED', 'this case is already closed; start a new session for a new case')
-    }
+    // Entering a terminal case starts a new sequential case; the previous case
+    // is archived and all case-scoped fields are reset. The audit log is kept.
     return { action, abandonReason: null }
   }
   if (state.closure !== null) return { action, abandonReason: null }

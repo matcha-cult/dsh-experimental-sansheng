@@ -204,6 +204,7 @@ window.__ModuleLoader__.load({
 		function eventText(entry) {
 			switch (entry.op) {
 				case "mode":
+					if (entry.newCase === true) return "开新宗卷 #" + String(entry.caseId ?? "?");
 					return entry.abandoned !== null && entry.abandoned !== undefined
 						? "离开模式并放弃：" + entry.abandoned
 						: entry.active === true ? "进入模式" : "离开模式";
@@ -451,7 +452,30 @@ window.__ModuleLoader__.load({
 					),
 				),
 				h(Warnings, { board, team }),
+				h(CaseArchive, { board }),
 				h("div", { className: "dss-section" }, h("h4", null, "结案 · 尚书省汇总"), h(ClosureSummary, { board })),
+			);
+		}
+
+		function CaseArchive(props) {
+			const { board } = props;
+			const cases = Array.isArray(board.cases) ? board.cases : [];
+			if (cases.length === 0) return null;
+			return h(
+				"div",
+				{ className: "dss-section" },
+				h("h4", null, "宗卷历史 · 只读"),
+				cases.slice().reverse().map((entry) => h(
+					"div",
+					{ className: "dss-task", key: "case-" + String(entry.caseId) },
+					h("div", { className: "dss-row" },
+						h("strong", null, "#" + String(entry.caseId)),
+						h("span", { className: "dss-badge " + (entry.outcome === "closed" ? "dss-badge-pass" : "dss-badge-reject") }, entry.outcome === "closed" ? "已结案" : entry.outcome === "abandoned" ? "已放弃" : "未结"),
+						h("span", { className: "dss-muted" }, String(entry.tier ?? "?")),
+					),
+					h("div", { className: "dss-muted" }, String(entry.goal ?? "（无目标）")),
+					entry.abandonedReason ? h("div", { className: "dss-warn" }, "放弃原因：" + entry.abandonedReason) : null,
+				)),
 			);
 		}
 
@@ -700,6 +724,7 @@ window.__ModuleLoader__.load({
 						h("strong", null, "三省六部 · 看板"),
 						h("span", { className: "dss-pinyin" }, "Sān Shěng Liù Bù"),
 						h("span", { className: "dss-chip" }, "rev ", h("b", null, String(board.revision ?? 0))),
+						h("span", { className: "dss-chip" }, "案卷 ", h("b", null, "#" + String(board.caseId ?? 1))),
 						board.closure !== null ? h("span", { className: "dss-chip" }, "已结案") : null,
 						board.abandoned !== null && board.abandoned !== undefined ? h("span", { className: "dss-chip dss-warn" }, "已放弃") : null,
 					),

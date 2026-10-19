@@ -172,6 +172,17 @@ function stateSchema() {
       at: zod.number().nullable(),
       rev: zod.number(),
     })),
+    caseId: zod.number(),
+    cases: zod.array(zod.object({
+      caseId: zod.number(),
+      goal: zod.string().nullable(),
+      tier: zod.string().nullable(),
+      outcome: zod.string(),
+      conclusions: zod.array(zod.string()),
+      abandonedReason: zod.string().nullable(),
+      revision: zod.number(),
+      at: zod.number().nullable(),
+    })),
     history: zod.array(zod.any()),
     updatedAt: zod.number().nullable(),
     revision: zod.number(),
@@ -454,7 +465,7 @@ export function apply(ctx, config = {}) {
 
   registerTool({
     name: 'sansheng_mode',
-    description: 'Enter, leave, or inspect the 三省六部 (Sān Shěng Liù Bù) mode. The mode is recorded in the Lead session event log; there is no shared board file. Only the Lead may enter or leave; any member may inspect. Enter/leave require expected_revision; leaving an open case also requires abandon_reason.',
+    description: 'Enter, leave, or inspect the 三省六部 (Sān Shěng Liù Bù) mode. The mode is recorded in the Lead session event log; there is no shared board file. Only the Lead may enter or leave; any member may inspect. Enter/leave require expected_revision; leaving an open case also requires abandon_reason. Entering after a closed or abandoned case starts the next sequential case and archives the previous one; the session log keeps the full audit.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -489,7 +500,8 @@ export function apply(ctx, config = {}) {
       const normalized = validateModeAction(boardView(agent), args)
       const active = normalized.action === 'enter'
       const abandoning = normalized.abandonReason !== null && state.abandoned === null
-      if (state.active === active && !abandoning) {
+      const startsNewCase = active && (state.closure !== null || state.abandoned !== null)
+      if (state.active === active && !abandoning && !startsNewCase) {
         return JSON.stringify({ active, changed: false, revision: effectiveRevision(agent) })
       }
       const revision = reserveRevision(agent)

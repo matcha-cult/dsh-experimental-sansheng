@@ -65,3 +65,12 @@ These public projects independently converge on the same separation and were use
 - OpenCode plugins such as `sjzsdu/OpencodePlugins`, `opencode-plugin-emperor`, `opencode-imperial`, `oh-my-tang-dynasty` — review/dispatch/audit workflow variants.
 
 They are credited as references only; this package does not vendor their code.
+
+
+## Sequential cases
+
+The board is single-case by design but a session may contain a sequence of
+cases. `sansheng_mode enter` after a closed or abandoned case archives a compact
+summary in `cases[]`, resets case-scoped fields, and increments `caseId`; the
+append-only session log remains the complete audit. Parallel cases are out of
+scope.

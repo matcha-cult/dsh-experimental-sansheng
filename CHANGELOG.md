@@ -4,6 +4,25 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-10-19
+
+### Added
+
+- **Sequential cases in one session**: after `sansheng_close` or an abandoned
+  leave, `sansheng_mode {action:"enter"}` starts the next case instead of
+  rejecting with `CASE_ALREADY_CLOSED`. The previous case is archived as a
+  compact summary in `cases[]`, all case-scoped fields are reset, `caseId`
+  increments, and the session log keeps the full audit.
+- Board shows the current `案卷 #N`, plus a read-only 宗卷历史 list of archived
+  cases (goal, tier, closed/abandoned, reason).
+- Sequential only: at most one active case; parallel/multi-case was deliberately
+  not added.
+
+### Changed
+
+- Mode enter after a closed/abandoned case is a new-case action; entering an
+  open active case remains a no-op.
+
 ## [0.5.0] — 2026-10-19
 
 ### Added

@@ -99,6 +99,15 @@ The mode separates **decision, review and execution**, then turns good intention
 
 > **政事堂 is not a fourth department**: it is the Lead's coordinating seat. The same Lead switches hats between 中书省 (drafting) and 尚书省 (dispatch/summary); 门下省 is the genuinely independent reviewer.
 
+### Sequential cases in one session
+
+One active case at a time. After `sansheng_close` or an abandoned leave,
+`sansheng_mode {action:"enter"}` starts the next case: the previous case is
+archived as a compact `cases[]` summary, all case-scoped fields reset,
+`caseId` increments, and the same session log keeps the full audit. The board
+shows the current `案卷 #N` and a read-only 宗卷历史 list. Parallel cases are
+deliberately unsupported.
+
 ### Case state machine (12 phases)
 
 Phases are derived from the session event log; no second state store is kept. `sansheng_board` exposes `phase`:

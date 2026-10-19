@@ -216,6 +216,7 @@ test('an agent-preset selection event activates or deactivates the mode', () => 
   const base = createEmptyState()
   const selected = foldEvent(base, { type: 'agent-preset/selected', data: { agentPreset: 'sansheng' } }, 'sansheng')
   assert.equal(selected.active, true)
+  assert.equal(selected.caseId, 1)
   const standard = foldEvent(selected, { type: 'agent-preset/selected', data: { agentPreset: 'standard' } }, 'sansheng')
   assert.equal(standard.active, false)
   const unrelated = foldEvent(base, { type: 'agent-preset/selected', data: { agentPreset: 'sansheng' } }, 'other')
@@ -369,14 +370,34 @@ test('mode actions require the current revision and a close-or-abandon leave', (
   assert.equal(validateModeAction(state, { action: 'status' }).action, 'status')
 })
 
-test('enter is rejected after the case is closed', () => {
+test('enter after a closed case starts a new sequential case and archives the old one', () => {
   const state = foldEvent(closedState(), toolResult(record('close', {
     closure: { id: 'close-1', conclusions: ['done'], deliverables: ['d'], unknowns: [], next: [], closedBy: 'lead', createdAt: null },
   })))
-  assertCode(
-    () => validateModeAction(state, { action: 'enter', expected_revision: state.revision }),
-    'CASE_ALREADY_CLOSED',
-  )
+  assert.doesNotThrow(() => validateModeAction(state, { action: 'enter', expected_revision: state.revision }))
+  const reopened = append(state, 'mode', { active: true })
+  assert.equal(reopened.active, true)
+  assert.equal(reopened.caseId, 2)
+  assert.equal(reopened.edict, null)
+  assert.equal(reopened.closure, null)
+  assert.deepEqual(reopened.appointments, [])
+  assert.equal(reopened.cases.length, 1)
+  assert.equal(reopened.cases[0].outcome, 'closed')
+  assert.equal(reopened.cases[0].caseId, 1)
+  assert.equal(reopened.history.at(-1).newCase, true)
+})
+
+test('first manual entry starts case 1 and re-entry after abandon starts a new case', () => {
+  let state = append(createEmptyState(), 'mode', { active: true })
+  assert.equal(state.caseId, 1)
+  state = activeState()
+  state = append(state, 'mode', { active: false, abandoned: 'switch task' })
+  assert.equal(state.abandoned.reason, 'switch task')
+  assert.doesNotThrow(() => validateModeAction(state, { action: 'enter', expected_revision: state.revision }))
+  const reopened = append(state, 'mode', { active: true })
+  assert.equal(reopened.caseId, 2)
+  assert.equal(reopened.abandoned, null)
+  assert.equal(reopened.cases.at(-1).outcome, 'abandoned')
 })
 
 /* Edict */
