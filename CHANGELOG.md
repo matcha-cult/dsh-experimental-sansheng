@@ -4,6 +4,26 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.1] — 2026-10-19
+
+Fresh version baseline after clearing remote tags.
+
+### Added
+
+- **Four-level triage** (`sansheng_triage`): trivial / small / medium / large
+  from the three questions (independent review → plan gate → reviewer
+  supervision); a user-requested tier wins. Trivial skips the mode
+  (`sansheng_mode {action:"skip"}` for an active preset); small is Lead + one
+  independent verifier, no plan gate and no ministry appointments.
+- Small-tier light path: result gate by the single verifier, evidence/close
+  unchanged; plan gate/ministry appointments are explicitly not required.
+- Sequential cases (from the previous untagged 0.6.0 work): re-entering after
+  close/abandon starts the next case, archives `cases[]`, resets case-scoped
+  state and increments `caseId`; board shows 案卷 #N and 宗卷历史.
+- 0.5.0 governance work included in this baseline: structured risk fields,
+  conditional gates, independent audit, role cards, 12-phase state machine,
+  rejection escalation.
+
 ## [0.6.0] — 2026-10-19
 
 ### Added

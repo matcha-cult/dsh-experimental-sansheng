@@ -21,6 +21,7 @@ import {
   validateEvidenceInput,
   validateGateInput,
   validateModeAction,
+  validateTriageInput,
 } from '../src/policy.js'
 
 const LEAD = { role: 'lead', name: 'lead' }
@@ -425,7 +426,8 @@ test('edict validation rejects bad tier, caps, missing fields and stale revision
   assertCode(() => validateEdictInput(state, { ...base, goal: 'g', acceptance: [] }), 'INVALID_FIELD')
   assertCode(() => validateEdictInput(state, { ...base, goal: 'g', tier: 'huge' }), 'INVALID_TIER')
   assertCode(() => validateEdictInput(state, { ...base, goal: 'g', roster_cap: 9 }), 'ROSTER_CAP_ABOVE_TIER')
-  assertCode(() => validateEdictInput(state, { ...base, goal: 'g', tier: 'small', roster_cap: 1 }), 'SMALL_TIER_NEEDS_NO_TEAM')
+  assertCode(() => validateEdictInput(state, { ...base, goal: 'g', tier: 'small', roster_cap: 2 }), 'SMALL_TIER_NEEDS_ONE_VERIFIER')
+  assert.equal(validateEdictInput(state, { ...base, goal: 'g', tier: 'small', roster_cap: 1 }).rosterCap, 1)
   assertCode(() => validateEdictInput(state, { ...base, goal: 'g', roster_cap: 99 }), 'INVALID_ROSTER_CAP')
   assertCode(() => validateEdictInput(state, { ...base, goal: 'g', expected_revision: 1 }), 'STALE_REVISION')
 })
@@ -513,6 +515,40 @@ test('a pass must cite checked items and be cast by an independent teammate', ()
     () => validateGateInput(state, { kind: 'plan', verdict: 'pass', defects: ['oops'], checked: ['x'], expected_revision: state.revision }, REVIEWER),
     'DEFECTS_ON_PASS',
   )
+})
+
+test('small tier is a light path: one verifier, no plan gate, result gate + close', () => {
+  let state = activeState(baseEdict({ tier: 'small', rosterCap: 1, departments: [] }))
+  assert.equal(casePhase(state), 'executing')
+  state = evidence(state)
+  state = resultPass(state)
+  assert.equal(casePhase(state), 'ready_to_close')
+  const report = validateCloseInput(state, { conclusions: ['done'], deliverables: ['src'], expected_revision: state.revision }, TASKS, LEAD)
+  assert.deepEqual(report.conclusions, ['done'])
+})
+
+test('triage derives the four levels and an explicit user tier wins', () => {
+  const trivial = validateTriageInput({ task: 'one command' })
+  assert.equal(trivial.tier, 'trivial')
+  assert.equal(trivial.useMode, false)
+  assert.equal(validateTriageInput({ task: 'one change', needs_independent_review: true }).tier, 'small')
+  assert.equal(validateTriageInput({ task: 'multi', needs_independent_review: true, needs_plan_gate: true }).tier, 'medium')
+  assert.equal(validateTriageInput({ task: 'risky', needs_independent_review: true, needs_plan_gate: true, needs_meta_review: true }).tier, 'large')
+  const requested = validateTriageInput({ task: 'make it medium', requested_tier: 'medium' })
+  assert.equal(requested.tier, 'medium')
+  assert.equal(requested.tierSource, 'user')
+  assert.equal(requested.mismatch, true)
+  assert.ok(requested.guidance.includes('完整中事'))
+})
+
+test('skip records a trivial preset session without drafting an edict', () => {
+  const presetActive = foldEvent(createEmptyState(), { type: 'agent-preset/selected', data: { agentPreset: 'sansheng' } }, 'sansheng')
+  assert.doesNotThrow(() => validateModeAction(presetActive, { action: 'skip', reason: 'trivial task', expected_revision: presetActive.revision }))
+  const skipped = append(presetActive, 'mode', { active: false, skipped: true, reason: 'trivial task' })
+  assert.equal(skipped.active, false)
+  assert.equal(skipped.history.at(-1).skipped, true)
+  const open = activeState()
+  assertCode(() => validateModeAction(open, { action: 'skip', reason: 'late', expected_revision: open.revision }), 'SKIP_AFTER_EDICT')
 })
 
 test('case phase is derived from the same event log', () => {

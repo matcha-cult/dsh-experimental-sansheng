@@ -74,3 +74,8 @@ cases. `sansheng_mode enter` after a closed or abandoned case archives a compact
 summary in `cases[]`, resets case-scoped fields, and increments `caseId`; the
 append-only session log remains the complete audit. Parallel cases are out of
 scope.
+
+
+## Four-level triage
+
+`sansheng_triage` returns a recommendation from three signals (independent review, plan gate, reviewer supervision) plus an optional user-requested tier, which wins. `trivial` means no mode (or `sansheng_mode skip` for an active preset); `small` is Lead + one independent verifier, no plan gate and no ministry appointments; medium/large retain the full gates. This is advice at the tool layer; only `sansheng_mode skip` and the small-tier gate semantics are enforced.

@@ -242,7 +242,7 @@ window.__ModuleLoader__.load({
 		}
 
 		function GateSection(props) {
-			const { title, gate } = props;
+			const { title, gate, notRequired } = props;
 			return h(
 				"div",
 				{ className: "dss-section" },
@@ -250,10 +250,12 @@ window.__ModuleLoader__.load({
 				h(
 					"div",
 					{ className: "dss-row" },
-					gateBadge(gate),
-					gate === null
-						? h("span", { className: "dss-muted" }, "尚未提交")
-						: h("span", { className: "dss-muted" }, "由 " + gate.reviewer + " 判定"),
+					notRequired && gate === null ? h("span", { className: "dss-badge dss-badge-pending" }, "轻量不需要") : gateBadge(gate),
+					notRequired && gate === null
+						? h("span", { className: "dss-muted" }, "small 档只做独立成果复核")
+						: gate === null
+							? h("span", { className: "dss-muted" }, "尚未提交")
+							: h("span", { className: "dss-muted" }, "由 " + gate.reviewer + " 判定"),
 				),
 				gate !== null && Array.isArray(gate.defects) && gate.defects.length > 0
 					? h("ul", { className: "dss-defects" }, gate.defects.map((defect, index) => h("li", { key: index }, defect)))
@@ -347,7 +349,7 @@ window.__ModuleLoader__.load({
 		function Appointments(props) {
 			const { board } = props;
 			if (!Array.isArray(board.appointments) || board.appointments.length === 0) {
-				return h("p", { className: "dss-empty" }, "尚未任命六部。");
+				return h("p", { className: "dss-empty" }, board.edict !== null && board.edict.tier === "small" ? "small 轻量路径不任命六部：Lead 执行，一名独立 verifier 复核。" : "尚未任命六部。");
 			}
 			return h(
 				"div",
@@ -379,7 +381,7 @@ window.__ModuleLoader__.load({
 			const warnings = [];
 			if (board.abandoned !== null && board.abandoned !== undefined) warnings.push("本案件已放弃：" + board.abandoned.reason + "。重新进入模式可继续。");
 			if (board.edict === null) warnings.push("尚未拟旨：先调用 sansheng_edict。");
-			if (board.edict !== null && plan === null) warnings.push("计划门未审：需要门下省用 sansheng_gate {kind:\"plan\"} 审议。");
+			if (board.edict !== null && board.edict.tier !== "small" && plan === null) warnings.push("计划门未审：需要门下省用 sansheng_gate {kind:\"plan\"} 审议。");
 			if (plan !== null && plan.verdict === "reject") warnings.push("计划被门封驳：按缺陷清单整改后重新拟旨。");
 			if (board.edict !== null && board.edict.tier !== "small" && plan !== null && plan.verdict === "pass" && board.appointments.length === 0 && board.closure === null) {
 				warnings.push("计划已过门但尚未派工：尚书省应任命六部后再开工。");
@@ -433,7 +435,7 @@ window.__ModuleLoader__.load({
 				null,
 				h("div", { className: "dss-stats dss-section" },
 					h("span", { className: "dss-chip" }, "rev ", h("b", null, String(board.revision ?? 0))),
-					h("span", { className: "dss-chip" }, "计划门 ", h("b", null, plan === null ? "待审" : plan.verdict === "pass" ? "通过" : "封驳")),
+					h("span", { className: "dss-chip" }, "计划门 ", h("b", null, plan === null ? (board.edict !== null && board.edict.tier === "small" ? "不需要" : "待审") : plan.verdict === "pass" ? "通过" : "封驳")),
 					h("span", { className: "dss-chip" }, "成果门 ", h("b", null, result === null ? "待审" : result.verdict === "pass" ? "通过" : "封驳")),
 					h("span", { className: "dss-chip" }, "御批 ", h("b", null, latestApprovalLabel(board, plan))),
 					h("span", { className: "dss-chip" }, "任务 ", h("b", null, completed + "/" + tasks.length)),
@@ -447,7 +449,7 @@ window.__ModuleLoader__.load({
 						h("div", { className: "dss-section" }, h("h4", null, "派发 · 尚书省"), h(Appointments, { board })),
 					),
 					h("div", null,
-						h("div", { className: "dss-section" }, h("h4", null, "计划门 · 门下省"), h(GateSection, { title: "第 " + String(board.planRounds ?? 1) + " 轮", gate: plan })),
+						h("div", { className: "dss-section" }, h("h4", null, "计划门 · 门下省"), h(GateSection, { title: "第 " + String(board.planRounds ?? 1) + " 轮", gate: plan, notRequired: board.edict !== null && board.edict.tier === "small" })),
 						h("div", { className: "dss-section" }, h("h4", null, "成果门 · 门下省"), h(GateSection, { title: "第 " + String(board.resultRounds ?? 1) + " 轮", gate: result })),
 					),
 				),
@@ -546,9 +548,9 @@ window.__ModuleLoader__.load({
 		}
 
 		function GateDetail(props) {
-			const { gate, kind, round } = props;
+			const { gate, kind, round, notRequired } = props;
 			if (gate === null) {
-				return h("div", { className: "dss-card" }, h("p", { className: "dss-empty" }, kind + "尚未提交。"));
+				return h("div", { className: "dss-card" }, h("p", { className: "dss-empty" }, notRequired ? "small 轻量路径不需要计划门。" : kind + "尚未提交。"));
 			}
 			return h(
 				"div",
@@ -591,7 +593,7 @@ window.__ModuleLoader__.load({
 			return h(
 				"div",
 				null,
-				h("div", { className: "dss-section" }, h("h4", null, "计划门 · 门下省（第 " + String(board.planRounds ?? 1) + " 轮）"), h(GateDetail, { gate: latestGate(board, "plan"), kind: "计划门", round: board.planRounds ?? 1 })),
+				h("div", { className: "dss-section" }, h("h4", null, "计划门 · 门下省（第 " + String(board.planRounds ?? 1) + " 轮）"), h(GateDetail, { gate: latestGate(board, "plan"), kind: "计划门", round: board.planRounds ?? 1, notRequired: board.edict !== null && board.edict.tier === "small" })),
 				h("div", { className: "dss-section" }, h("h4", null, "成果门 · 门下省（第 " + String(board.resultRounds ?? 1) + " 轮）"), h(GateDetail, { gate: latestGate(board, "result"), kind: "成果门", round: board.resultRounds ?? 1 })),
 				h("div", { className: "dss-section" }, h("h4", null, "独立审计 · 刑部/独立成员"), h(AuditList, { board })),
 			);

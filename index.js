@@ -41,6 +41,7 @@ import {
   validateEvidenceInput,
   validateGateInput,
   validateModeAction,
+  validateTriageInput,
 } from './src/policy.js'
 import { createHistoryState, foldHistoryEvent } from './src/history.js'
 
@@ -464,6 +465,34 @@ export function apply(ctx, config = {}) {
   }
 
   registerTool({
+    name: 'sansheng_triage',
+    description: 'Four-level triage before drafting an edict. The Lead answers the three questions (independent review? plan gate? reviewer-of-reviewer?) and may pass the user-requested tier, which wins. trivial means do not enter the mode (or skip an already active preset); small is Lead + one independent verifier, no plan gate and no ministry appointments; medium/large use the full gates. This tool is advice, not a hard gate.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        task: { type: 'string', description: 'What the user asked for, one short paragraph.' },
+        requested_tier: {
+          type: 'string',
+          enum: ['trivial', 'small', 'medium', 'large'],
+          description: 'Tier explicitly named by the user; it wins over the self-assessment.',
+        },
+        needs_independent_review: { type: 'boolean', description: 'Does the delivery need a second, independent verifier?' },
+        needs_plan_gate: { type: 'boolean', description: 'Does the plan need an independent 门下省 review before work?' },
+        needs_meta_review: { type: 'boolean', description: 'Does the reviewer also need supervision/audit?' },
+      },
+      required: ['task'],
+    },
+    output: textOutput,
+    execute(args, exec) {
+      const agent = requireAgent(exec, 'sansheng_triage')
+      const caller = memberOf(agent)
+      if (caller.role !== 'lead') throw new SanshengError('LEAD_ONLY', 'only the Lead (中书省) classifies the task')
+      return JSON.stringify(validateTriageInput(args))
+    },
+  })
+
+  registerTool({
     name: 'sansheng_mode',
     description: 'Enter, leave, or inspect the 三省六部 (Sān Shěng Liù Bù) mode. The mode is recorded in the Lead session event log; there is no shared board file. Only the Lead may enter or leave; any member may inspect. Enter/leave require expected_revision; leaving an open case also requires abandon_reason. Entering after a closed or abandoned case starts the next sequential case and archives the previous one; the session log keeps the full audit.',
     parameters: {
@@ -472,8 +501,8 @@ export function apply(ctx, config = {}) {
       properties: {
         action: {
           type: 'string',
-          enum: ['enter', 'leave', 'status'],
-          description: 'enter: start the mode for this Team. leave: stop enforcing it. status: return the compact board summary.',
+          enum: ['enter', 'leave', 'skip', 'status'],
+          description: 'enter: start/continue the mode. leave: stop enforcing it. skip: record that a trivial task does not need the mode. status: return the compact board summary.',
         },
         expected_revision: {
           type: 'integer',
@@ -482,6 +511,10 @@ export function apply(ctx, config = {}) {
         abandon_reason: {
           type: 'string',
           description: 'Required to leave an open case without closing it; recorded on the board as an abandoned case.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Reason for action=skip (a trivial task).',
         },
       },
       required: ['action'],
@@ -499,6 +532,7 @@ export function apply(ctx, config = {}) {
       const state = boardOf(agent)
       const normalized = validateModeAction(boardView(agent), args)
       const active = normalized.action === 'enter'
+      const skipping = normalized.action === 'skip'
       const abandoning = normalized.abandonReason !== null && state.abandoned === null
       const startsNewCase = active && (state.closure !== null || state.abandoned !== null)
       if (state.active === active && !abandoning && !startsNewCase) {
@@ -509,6 +543,10 @@ export function apply(ctx, config = {}) {
       if (normalized.abandonReason !== null) {
         payload.abandoned = normalized.abandonReason
         payload.abandonedAt = Date.now()
+      }
+      if (skipping) {
+        payload.skipped = true
+        payload.reason = normalized.reason ?? 'trivial task'
       }
       return serializeRecord('mode', payload)
     },
@@ -535,7 +573,7 @@ export function apply(ctx, config = {}) {
         tier: {
           type: 'string',
           enum: ['small', 'medium', 'large'],
-          description: 'small: one agent, no team (roster cap 0). medium: at most 5 teammates. large: at most 9 teammates.',
+          description: 'small: Lead + one independent verifier (roster_cap 1), no plan gate and no appointments. medium: at most 5 teammates. large: at most 9 teammates.',
         },
         roster_cap: {
           type: 'integer',

@@ -12,7 +12,7 @@ import { ministryRole } from './ministries.js'
 
 
 /** Maximum teammate count per task tier. The Lead is never counted. */
-export const TIERS = Object.freeze({ small: 0, medium: 5, large: 9 })
+export const TIERS = Object.freeze({ small: 1, medium: 5, large: 9 })
 
 /** Accepted edict risk levels. */
 export const RISK_LEVELS = Object.freeze(['low', 'medium', 'high', 'irreversible'])
@@ -82,15 +82,16 @@ export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù B
 Every mutating tool takes expected_revision (the revision you last read from sansheng_board). A stale value is rejected — read the board again, do not guess. Every committed step increments the board revision.
 
 Procedure (all state is recorded in this session's event log — never coordinate through files or temp directories):
+0. Triage first: call sansheng_triage {task, requested_tier?, needs_independent_review, needs_plan_gate, needs_meta_review}. A tier explicitly requested by the user wins; the three questions only cross-check it. trivial: do not enter the mode (if a preset is active, call sansheng_mode {action:"skip"}); small: Lead plus one independent verifier, no plan gate and no ministry appointments; medium/large: the full flow below.
 The Lead wears two hats: 中书省 (receiving the emperor's intent and drafting the plan) and 尚书省 (dispatching after the gates and summarizing at close). 门下省 is an independent teammate; 政事堂 is the Lead's coordinating seat, not a fourth department. Ministry boundaries: 吏部=identity/permissions, 户部=budget/resources, 礼部=interaction/format, 兵部=security/incident, 刑部=audit/evidence, 工部=tools/infrastructure. These are responsibility boundaries, not a host sandbox.
 
 1. 中书省 (Lead, drafting hat) receives the intent and drafts the edict: sansheng_edict {goal, acceptance, boundaries, tier, roster_cap, departments, assumptions, risks, tools, data_scope, risk_level, budget}. High/irreversible risk requires assumptions, risks, tools, data_scope and budget.
-2. 门下省 reviews the plan: an independent teammate calls sansheng_gate {kind: "plan", verdict, checked, conditions?}. The Lead can never approve its own plan; a pass must cite at least one checked item. Optional conditions make it a conditional pass. A reject must carry defects; after a reject, revise the edict before a new plan review.
-3. Only after the plan gate passes, and after a real user /sansheng approve when tier is large or risk_level is high/irreversible: 尚书省 (Lead, dispatch hat) uses sansheng_appoint for each teammate to one of the 六部, then creates team tasks and spawns teammates.
+2. For medium/large only, 门下省 reviews the plan: an independent teammate calls sansheng_gate {kind: "plan", verdict, checked, conditions?}. The Lead can never approve its own plan; a pass must cite at least one checked item. Optional conditions make it a conditional pass. A reject must carry defects; after a reject, revise the edict before a new plan review.
+3. For medium/large, only after the plan gate passes, and after a real user /sansheng approve when tier is large or risk_level is high/irreversible: 尚书省 (Lead, dispatch hat) uses sansheng_appoint for each teammate to one of the 六部, then creates team tasks and spawns teammates.
 4. 六部 execute. 刑部 submits evidence for a completed shared task: sansheng_evidence {task_id, command, exit_code, digest, excerpt}. A digest (hex) and a bounded excerpt are required.
-5. 门下省 reviews the result: a different teammate (never the plan reviewer, never a task owner) calls sansheng_gate {kind: "result", verdict, checked, conditions?, reviews}. For a pass, reviews must cover every completed shared task with verdict "pass".
+5. 门下省 reviews the result (small tier uses its single independent verifier; no plan gate is required): a different teammate (never the plan reviewer, never a task owner) calls sansheng_gate {kind: "result", verdict, checked, conditions?, reviews}. For a pass, reviews must cover every completed shared task with verdict "pass".
 5b. Independent audit: when a gate has conditions, or the edict risk is high/irreversible, an independent teammate calls sansheng_audit {scope, verdict, checks, conditions_met?}. An appointed 刑部 may audit; other appointed ministries may not. The auditor cannot own a task or be the gate reviewer. A passing audit confirms every condition.
-6. Only after both gates pass, every shared task is completed or deleted, every completed task has evidence, every conditional gate has a newer passing audit, and high-risk work has a passing result audit, 尚书省 (Lead, summary hat) calls sansheng_close and reports the result.
+6. Only after the required gates pass (for small: the result gate), every shared task is completed or deleted, every completed task has evidence, every conditional gate has a newer passing audit, and high-risk work has a passing result audit, 尚书省 (Lead, summary hat) calls sansheng_close and reports the result.
 
 Leaving the mode requires a closed case or an explicit abandon_reason; abandoning is recorded on the board. Closing with unfinished shared tasks is rejected. Never claim completion before sansheng_close returns. Use sansheng_board for the current board state and revision.`
 
@@ -314,6 +315,8 @@ export function applyRecord(state, record, eventTime = null) {
           by: record.by ?? 'lead',
           active: false,
           abandoned: patch.abandoned?.reason ?? null,
+          skipped: record.skipped === true,
+          reason: typeof record.reason === 'string' ? record.reason : null,
         },
       )
     }
@@ -575,6 +578,22 @@ export function casePhase(state) {
   if (state.abandoned !== null && state.abandoned !== undefined) return 'abandoned'
   if (state.edict === null) return 'intake'
   const plan = latestGate(state, 'plan')
+  if (state.edict.tier === 'small') {
+    const smallResult = latestGate(state, 'result')
+    if (smallResult === undefined) return 'executing'
+    if (smallResult.verdict === 'reject') return 'result_rejected'
+    for (const scope of GATE_KINDS) {
+      const gate = latestGate(state, scope)
+      const conditions = Array.isArray(gate?.conditions) ? gate.conditions : []
+      if (conditions.length > 0) {
+        const audit = latestAudit(state, scope)
+        if (audit === undefined || audit.verdict !== 'pass' || audit.rev <= gate.rev) return 'auditing'
+        const met = new Set(audit.conditionsMet)
+        if (conditions.some((condition) => !met.has(condition))) return 'auditing'
+      }
+    }
+    return 'ready_to_close'
+  }
   if (plan === undefined) return 'plan_review'
   if (plan.verdict === 'reject') return 'plan_rejected'
   if (needsHumanApproval(state.edict)) {
@@ -737,7 +756,8 @@ export function boardAlerts(state, tasks = [], now = Date.now()) {
   if (state.edict === null) alerts.push('尚未拟旨：先调用 sansheng_edict。')
   const plan = latestGate(state, 'plan')
   const result = latestGate(state, 'result')
-  if (state.edict !== null && plan === undefined) alerts.push('计划门未审：需要门下省 sansheng_gate {kind:"plan"}。')
+  if (state.edict !== null && state.edict.tier !== 'small' && plan === undefined) alerts.push('计划门未审：需要门下省 sansheng_gate {kind:"plan"}。')
+  if (state.edict !== null && state.edict.tier === 'small') alerts.push('small 轻量路径：Lead 执行，一名独立 verifier 做成果复核；不需要计划门/六部任命。')
   if (plan !== undefined && plan.verdict === 'reject') alerts.push('计划被门封驳：按 defects 整改并重新拟旨。')
   if (state.edict !== null && needsHumanApproval(state.edict) && plan?.verdict === 'pass' && state.closure === null) {
     const approvals = Array.isArray(state.approvals) ? state.approvals : []
@@ -855,10 +875,68 @@ function assertExpectedRevision(state, input) {
  * @param {object} input Raw tool arguments.
  * @returns {{action: 'enter'|'leave'|'status', abandonReason: string|null}} Normalized action.
  */
+/** Four-level triage labels used by the skill and the board. */
+export const TRIAGE_TIERS = Object.freeze(['trivial', 'small', 'medium', 'large'])
+
+/**
+ * Validate one triage decision. The user's requested tier wins; the checklist
+ * assessment is returned alongside it so the board/Lead can cross-check.
+ * This is advice, not a tool-level gate: the Lead still chooses the edict tier.
+ * @param {object} input Raw tool arguments.
+ * @returns {{task: string, requestedTier: string|null, assessedTier: string, tier: string, tierSource: 'user'|'assessed', useMode: boolean, actors: string, needsIndependentReview: boolean, needsPlanGate: boolean, needsMetaReview: boolean, mismatch: boolean, guidance: string}} Triage result.
+ */
+export function validateTriageInput(input) {
+  const task = requiredString(input?.task, 'task', 4000)
+  const requestedTier = input?.requested_tier === undefined || input.requested_tier === null || input.requested_tier === ''
+    ? null
+    : input.requested_tier
+  if (requestedTier !== null && !TRIAGE_TIERS.includes(requestedTier)) {
+    fail('INVALID_TIER', `requested_tier must be one of: ${TRIAGE_TIERS.join(', ')}`)
+  }
+  const flag = (name) => {
+    if (input?.[name] === undefined || input?.[name] === null) return false
+    if (typeof input[name] !== 'boolean') fail('INVALID_FIELD', `${name} must be a boolean`)
+    return input[name]
+  }
+  const needsIndependentReview = flag('needs_independent_review')
+  const needsPlanGate = flag('needs_plan_gate')
+  const needsMetaReview = flag('needs_meta_review')
+  const assessedTier = needsMetaReview ? 'large' : needsPlanGate ? 'medium' : needsIndependentReview ? 'small' : 'trivial'
+  const tier = requestedTier ?? assessedTier
+  const tierSource = requestedTier === null ? 'assessed' : 'user'
+  const useMode = tier !== 'trivial'
+  const actors = tier === 'trivial' ? '1（Lead 自办）'
+    : tier === 'small' ? '2（Lead + 1 独立 verifier）'
+      : tier === 'medium' ? '5–7（含门前复核）'
+        : '8–14（含监督复核）'
+  const mismatch = requestedTier !== null && requestedTier !== assessedTier
+  const guidance = tier === 'trivial'
+    ? '不进入三省六部：直接完成，一句话说明结果；如果预设已激活，调用 sansheng_mode {action:"skip", reason:"trivial"}。'
+    : tier === 'small'
+      ? '轻量路径：sansheng_edict {tier:"small", roster_cap:1}；Lead 执行，一名独立 verifier 做成果复核；不需要计划门、不任命六部。'
+      : tier === 'medium'
+        ? '完整中事：拟旨 → 计划门 → 派工 → 证据 → 成果门 → 结案。'
+        : '完整大事：在中事基础上加风险分析、条件/独立审计与监督复核。'
+  return {
+    task,
+    requestedTier,
+    assessedTier,
+    tier,
+    tierSource,
+    useMode,
+    actors,
+    needsIndependentReview,
+    needsPlanGate,
+    needsMetaReview,
+    mismatch,
+    guidance,
+  }
+}
+
 export function validateModeAction(state, input) {
   const action = input?.action
-  if (action !== 'enter' && action !== 'leave' && action !== 'status') {
-    fail('INVALID_ACTION', 'action must be one of: enter, leave, status')
+  if (action !== 'enter' && action !== 'leave' && action !== 'status' && action !== 'skip') {
+    fail('INVALID_ACTION', 'action must be one of: enter, leave, skip, status')
   }
   if (action === 'status') return { action, abandonReason: null }
   assertExpectedRevision(state, input)
@@ -866,6 +944,13 @@ export function validateModeAction(state, input) {
     // Entering a terminal case starts a new sequential case; the previous case
     // is archived and all case-scoped fields are reset. The audit log is kept.
     return { action, abandonReason: null }
+  }
+  if (action === 'skip') {
+    if (state.edict !== null) {
+      fail('SKIP_AFTER_EDICT', 'skip is only for a trivial task before drafting an edict; abandon an open case instead')
+    }
+    const reason = optionalString(input?.reason, 'reason', 2000)
+    return { action, abandonReason: null, reason }
   }
   if (state.closure !== null) return { action, abandonReason: null }
   let abandonReason = null
@@ -949,8 +1034,8 @@ export function validateEdictInput(state, input) {
   if (!Number.isInteger(rosterCap) || rosterCap < 0 || rosterCap > MAX_ROSTER_CAP) {
     fail('INVALID_ROSTER_CAP', `roster_cap must be an integer from 0 through ${MAX_ROSTER_CAP}`)
   }
-  if (tier === 'small' && rosterCap !== 0) {
-    fail('SMALL_TIER_NEEDS_NO_TEAM', 'small tier is handled by a single agent; set roster_cap 0 or do not enter this mode')
+  if (tier === 'small' && rosterCap > 1) {
+    fail('SMALL_TIER_NEEDS_ONE_VERIFIER', 'small tier is Lead plus at most one independent verifier; set roster_cap 0 or 1')
   }
   if (rosterCap > maxRoster) {
     fail('ROSTER_CAP_ABOVE_TIER', `${tier} tier allows at most ${maxRoster} teammates; got roster_cap ${rosterCap}`)
@@ -971,7 +1056,7 @@ export function validateEdictInput(state, input) {
   }
   const workstreams = workstreamList(input?.workstreams)
   if (workstreams.length > 0 && tier === 'small') {
-    fail('SMALL_TIER_WORKSTREAMS', 'small tier runs without teammates; omit workstreams')
+    fail('SMALL_TIER_WORKSTREAMS', 'small tier has no ministry appointments; omit workstreams')
   }
   for (const workstream of workstreams) {
     if (!departments.includes(workstream.department)) {
@@ -1007,7 +1092,7 @@ export function validateAppointInput(state, input, caller) {
     }
   }
   if (state.edict.tier === 'small') {
-    fail('SMALL_TIER_NEEDS_NO_TEAM', 'small tier runs without teammates; do not appoint 六部')
+    fail('SMALL_TIER_NEEDS_NO_TEAM', 'small tier uses one independent verifier, not appointed ministries; do not appoint 六部')
   }
   const member = requiredString(input?.member, 'member', 120)
   if (member === 'lead') fail('CANNOT_APPOINT_LEAD', 'the Lead cannot be appointed to a 部')
@@ -1102,7 +1187,7 @@ export function validateGateInput(state, input, caller, tasks = []) {
   if (!GATE_KINDS.includes(kind)) fail('INVALID_GATE_KIND', 'kind must be "plan" or "result"')
   const verdict = input?.verdict
   if (verdict !== 'pass' && verdict !== 'reject') fail('INVALID_VERDICT', 'verdict must be "pass" or "reject"')
-  if (kind === 'result' && validPlanGate(state) === undefined) {
+  if (kind === 'result' && state.edict.tier !== 'small' && validPlanGate(state) === undefined) {
     fail('PLAN_GATE_NOT_PASSED', 'the plan gate must pass after the current edict revision before the result gate can be reviewed')
   }
   const defects = stringList(input?.defects, 'defects', verdict === 'reject' ? 1 : 0, 20)
@@ -1266,7 +1351,7 @@ export function validateCloseInput(state, input, tasks, caller) {
   assertExpectedRevision(state, input)
   assertActive(state)
   if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (尚书省) may close the case')
-  if (validPlanGate(state) === undefined) {
+  if (state.edict.tier !== 'small' && validPlanGate(state) === undefined) {
     fail('PLAN_GATE_NOT_PASSED', 'cannot close before the 门下省 plan gate passes after the current edict revision')
   }
   if (latestGate(state, 'result')?.verdict !== 'pass') {

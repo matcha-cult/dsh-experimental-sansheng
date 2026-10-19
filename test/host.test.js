@@ -187,7 +187,7 @@ async function planPass(h, reviewer) {
   }, reviewer)
 }
 
-test('apply registers the project board, prompt section, and eight tools', () => {
+test('apply registers the project board, prompt section, and nine tools', () => {
   const h = harness()
   assert.equal(h.projection.key, 'sansheng')
   assert.equal(h.sections.length, 1)
@@ -203,6 +203,7 @@ test('apply registers the project board, prompt section, and eight tools', () =>
       'sansheng_evidence',
       'sansheng_gate',
       'sansheng_mode',
+      'sansheng_triage',
     ],
   )
   for (const entry of h.tools) {

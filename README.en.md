@@ -99,6 +99,19 @@ The mode separates **decision, review and execution**, then turns good intention
 
 > **政事堂 is not a fourth department**: it is the Lead's coordinating seat. The same Lead switches hats between 中书省 (drafting) and 尚书省 (dispatch/summary); 门下省 is the genuinely independent reviewer.
 
+### Four-level triage (adapted from 百官)
+
+Before drafting, call `sansheng_triage`; do not default to the full flow:
+
+| Tier | Signals | Handling |
+|---|---|---|
+| `trivial` | one command/answer/read-only point; no independent review | **do not enter the mode**; if a preset is active, `sansheng_mode {action:"skip", reason:"trivial"}`; answer directly |
+| `small` | single-point change needing an independent verifier, no plan gate | Lead + **one independent verifier**; `roster_cap=1`; no plan gate, no ministry appointments; result gate + close |
+| `medium` | 2–4 deliverables; plan needs independent review | full flow: plan gate + dispatch + evidence + result gate |
+| `large` | multi-module/cross-layer/irreversible/external | full flow + risk analysis + conditional/independent audit |
+
+Three questions: independent review? → independent plan gate? → reviewer supervision? All no = trivial; review only = small; plus plan gate = medium; plus supervision = large. A tier explicitly named by the user wins; the self-assessment is only a cross-check.
+
 ### Sequential cases in one session
 
 One active case at a time. After `sansheng_close` or an abandoned leave,
