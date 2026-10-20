@@ -4,6 +4,16 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.3] — 2026-10-20
+
+### Changed
+
+- Board entry is now **session-scoped**: a 军机处 button appears in the header of
+  the session whose board is active and opens a full **main page** for that
+  session. Removed the global sidebar icon and the floating overlay entirely.
+- The page has a 返回会话 button and keeps the six tabs.
+- No automatic opening; the board only opens from the active session's header.
+
 ## [0.0.2] — 2026-10-20
 
 ### Changed

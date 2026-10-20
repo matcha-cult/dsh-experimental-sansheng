@@ -16,7 +16,7 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 
 		/** Browser services required by the header action. */
-		const inject = ["slots"];
+		const inject = ["slots", "layout"];
 
 		const TAG = "dsh-experimental-sansheng";
 
@@ -844,12 +844,43 @@ window.__ModuleLoader__.load({
 			}, "省");
 		}
 
+		let boardTargetSessionId = null;
+		const boardTargetListeners = new Set();
+		function setBoardTarget(sessionId) {
+			boardTargetSessionId = sessionId;
+			for (const listener of boardTargetListeners) listener();
+		}
+		function useBoardTarget() {
+			const [target, setTarget] = react.useState(boardTargetSessionId);
+			react.useEffect(() => {
+				const listener = () => setTarget(boardTargetSessionId);
+				boardTargetListeners.add(listener);
+				listener();
+				return () => boardTargetListeners.delete(listener);
+			}, []);
+			return target;
+		}
+
+		function SanshengHeaderAction(props) {
+			const { sessionId, useSession, useSessions, openBoard } = props;
+			const parentId = useSession((snapshot) => snapshot?.subagent?.address?.parentSessionId);
+			const leadSessionId = parentId ?? sessionId;
+			const board = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sansheng);
+			if (board === undefined || board === null || board.active !== true) return null;
+			return h("button", {
+				type: "button",
+				className: "dss-trigger",
+				title: "打开军机处看板",
+				onClick: () => openBoard(leadSessionId),
+			}, h("span", { className: "dss-dot dss-dot-open" }), h("span", null, "军机处"));
+		}
+
 		function SanshengPage(props) {
 			const useSessions = props.useSessions;
 			const projections = useSessions((state) => state.projectionsBySession);
 			const byId = useSessions((state) => state.byId);
-			const [selectedId, setSelectedId] = react.useState(null);
 			const [tab, setTab] = react.useState("overview");
+			const targetSessionId = useBoardTarget();
 			const rows = react.useMemo(() => {
 				const list = [];
 				for (const [id, snapshot] of Object.entries(projections || {})) {
@@ -862,13 +893,10 @@ window.__ModuleLoader__.load({
 				list.sort((left, right) => right.updatedAt - left.updatedAt || String(left.id).localeCompare(String(right.id)));
 				return list;
 			}, [projections, byId]);
-			const active = rows.find((row) => row.id === selectedId) || rows[0] || null;
+			const active = rows.find((row) => row.id === targetSessionId) || rows[0] || null;
 			const board = active?.board ?? null;
 			const team = active === null ? undefined : projections?.[active.id]?.values?.agentTeam;
 			const detail = active === null ? undefined : projections?.[active.id]?.values?.sanshengHistory;
-			react.useEffect(() => {
-				if (active !== null && selectedId === null) setSelectedId(active.id);
-			}, [active, selectedId]);
 			const tabs = [
 				["overview", "总览"],
 				["tasks", "任务"],
@@ -892,12 +920,8 @@ window.__ModuleLoader__.load({
 				h("div", { className: "dss-page-inner" },
 					h("div", { className: "dss-page-head" },
 						h("h1", { className: "dss-page-title" }, "军机处 · 三省六部"),
-						h("span", { className: "dss-page-sub" }, board === null ? "暂无活动案卷" : "案卷 #" + String(board.caseId ?? 1) + " · rev " + String(board.revision ?? 0)),
-						rows.length > 1 ? h("select", {
-							className: "dss-page-select",
-							value: active?.id ?? "",
-							onChange: (event) => setSelectedId(event.target.value),
-						}, rows.map((row) => h("option", { key: row.id, value: row.id }, row.title))) : null,
+						h("span", { className: "dss-page-sub" }, board === null ? "暂无活动案卷" : "案卷 #" + String(board.caseId ?? 1) + " · rev " + String(board.revision ?? 0) + (active?.title ? " · " + active.title : "")),
+						h("button", { type: "button", className: "dss-link", onClick: () => props.onClose && props.onClose() }, "返回会话"),
 					),
 					board === null ? render() : h("div", null,
 						h("div", { className: "dss-page-tabs", role: "tablist" }, tabs.map(([key, label]) => h("button", {
@@ -915,15 +939,21 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			ctx.effect(() => ensureStyle(), "sansheng: board style");
-			ctx.slots.inject("sidebar.panellist", () =>
+			const actions = {
+				openBoard(sessionId) {
+					setBoardTarget(sessionId);
+					ctx.layout.selectPanel("sansheng");
+				},
+			};
+			ctx.slots.inject("conversation.session.header.actions", () =>
 				ctx.slots.register(
 					{
-						name: "sidebar.panellist",
+						name: "conversation.session.header.actions",
 						id: "sansheng",
-						order: 20,
-						label: () => "军机处",
+						order: -10,
+						inject: () => actions,
 					},
-					SanshengIcon,
+					SanshengHeaderAction,
 				),
 			);
 			ctx.slots.inject("main", () =>
@@ -932,7 +962,7 @@ window.__ModuleLoader__.load({
 						name: "main",
 						key: "sansheng",
 					},
-					SanshengPage,
+					(props) => h(SanshengPage, { ...props, onClose: () => ctx.layout.selectPanel(null) }),
 				),
 			);
 		}
