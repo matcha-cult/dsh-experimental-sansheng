@@ -4,6 +4,16 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.6] — 2026-10-20
+
+### Changed
+
+- Header shortcut copy: 军机处 → **三省六部·军机处**.
+- Right-sidebar tab label: **军机处看板**; panel title: **三省六部·军机处**.
+- Typography hierarchy follows the Web UI size: base/title/tabs 14px
+  (`var(--dsh-content-font-size)`), card/paragraph/body content 12px
+  (`calc(... - 2px)`), preserving the user's configured size.
+
 ## [0.0.5] — 2026-10-20
 
 ### Added

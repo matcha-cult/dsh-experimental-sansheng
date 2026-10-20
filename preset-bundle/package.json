@@ -1,6 +1,6 @@
 {
   "name": "dsh-experimental-sansheng-profile",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "\u4e09\u7701\u516d\u90e8 agent-preset bundle for dsh-experimental-sansheng: adds the \u4e09\u7701\u516d\u90e8 card to the new-task preset selector.",
   "type": "module",
   "main": "index.js",
@@ -41,6 +41,6 @@
     }
   },
   "dependencies": {
-    "dsh-experimental-sansheng": "^0.0.5"
+    "dsh-experimental-sansheng": "^0.0.6"
   }
 }

@@ -30,7 +30,8 @@ window.__ModuleLoader__.load({
 			".dss-dot-warn{background:var(--dsw-alias-state-error-primary,#f85149)}",
 			".dss-count{color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums}",
 			".dss-right{box-sizing:border-box;height:100%;overflow:auto;padding:4px 10px 20px;color:var(--dsw-alias-label-primary);font-size:var(--dsh-content-font-size,14px)}",
-			".dss-right *{font-size:inherit!important}",
+			".dss-right .dss-card,.dss-right .dss-task,.dss-right .dss-evidence,.dss-right .dss-history-item,.dss-right .dss-history-title,.dss-right .dss-history-head,.dss-right .dss-event-text,.dss-right .dss-task-meta,.dss-right .dss-list,.dss-right .dss-defects,.dss-right .dss-muted,.dss-right .dss-empty,.dss-right .dss-warn,.dss-right .dss-badge,.dss-right .dss-mono{font-size:calc(var(--dsh-content-font-size,14px) - 2px)}",
+			".dss-right .dss-section h4,.dss-right .dss-right-head strong,.dss-right .dss-page-tabs .dss-tab{font-size:var(--dsh-content-font-size,14px)}",
 			".dss-page{font-size:var(--dsh-content-font-size,14px)}",
 			".dss-page *{font-size:inherit!important}",
 			".dss-right-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:4px 2px 8px}",
@@ -878,11 +879,11 @@ window.__ModuleLoader__.load({
 				className: "dss-trigger",
 				title: "打开军机处看板",
 				onClick: () => openBoard(),
-			}, h("span", { className: "dss-dot dss-dot-open" }), h("span", null, "军机处"));
+			}, h("span", { className: "dss-dot dss-dot-open" }), h("span", null, "三省六部·军机处"));
 		}
 
 		function SanshengRightTitle() {
-			return h("span", null, "军机处");
+			return h("span", null, "军机处看板");
 		}
 
 		function SanshengRightPanel(props) {
@@ -916,7 +917,7 @@ window.__ModuleLoader__.load({
 				"div",
 				{ className: "dss-right" },
 				h("div", { className: "dss-right-head" },
-					h("strong", null, "军机处"),
+					h("strong", null, "三省六部·军机处"),
 					h("span", { className: "dss-muted" }, "案卷 #" + String(board.caseId ?? 1) + " · rev " + String(board.revision ?? 0)),
 				),
 				h("div", { className: "dss-page-tabs", role: "tablist" }, tabs.map(([key, label]) => h("button", {
@@ -1028,11 +1029,11 @@ window.__ModuleLoader__.load({
 				id: "sansheng",
 				kind: "sansheng",
 				priority: "extension",
-				title: () => "军机处",
+				title: () => "军机处看板",
 				guide: [{
 					id: "open",
 					order: 30,
-					title: () => "军机处",
+					title: () => "军机处看板",
 					description: () => "查看当前会话的三省六部案卷",
 					icon: SanshengIcon,
 				}],
