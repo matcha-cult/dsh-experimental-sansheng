@@ -557,6 +557,7 @@ export function apply(ctx, config = {}) {
       if (normalized.abandonReason !== null) {
         payload.abandoned = normalized.abandonReason
         payload.abandonedAt = Date.now()
+        payload.tasks = tasksOf(agent)
       }
       if (skipping) {
         payload.skipped = true
@@ -1018,7 +1019,7 @@ export function apply(ctx, config = {}) {
         closedBy: caller.name,
         createdAt: Date.now(),
       }
-      return serializeRecord('close', { rev: revision, by: caller.name, closure, evidenceCount: state.evidence.length })
+      return serializeRecord('close', { rev: revision, by: caller.name, closure, tasks, evidenceCount: state.evidence.length })
     },
   })
 

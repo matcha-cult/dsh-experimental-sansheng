@@ -778,6 +778,29 @@ test('intake requires a question while clarification is needed', () => {
   assert.deepEqual(intake.nonGoals, ['n'])
 })
 
+/* Sequential case archive */
+
+test('a new case archives the finished case tasks and timeline', () => {
+  let state = activeState()
+  state = append(state, 'close', {
+    closure: {
+      id: 'close-1', conclusions: ['done'], deliverables: ['src/a.js'], unknowns: [], next: [],
+      closedBy: 'lead', createdAt: null,
+    },
+    tasks: [
+      { id: 'task-1', subject: 'do the work', status: 'completed', ownerName: 'gongbu', writeScopes: ['src/'] },
+    ],
+  })
+  state = append(state, 'mode', { active: true })
+  const archived = state.cases.at(-1)
+  assert.equal(state.caseId, archived.caseId + 1)
+  assert.equal(state.caseTasks.length, 0)
+  assert.equal(archived.snapshot.tasks.length, 1)
+  assert.equal(archived.snapshot.tasks[0].id, 'task-1')
+  assert.ok(archived.snapshot.history.some((entry) => entry.op === 'close'))
+  assert.equal(archived.snapshot.history.at(-1).op, 'close')
+})
+
 /* Risk, conditional approval and audit */
 
 test('high-risk edicts require explicit assumptions, risks, tools, data scope and budget', () => {

@@ -42,6 +42,10 @@ window.__ModuleLoader__.load({
 			".dss-page-title{margin:0;font-size:20px;font-weight:600}",
 			".dss-page-sub{color:var(--dsw-alias-label-secondary);font-size:12px}",
 			".dss-page-select{margin-left:auto;max-width:320px;background:var(--dsw-alias-bg-layer-2,#242529);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2,#3a3b40);border-radius:7px;padding:5px 8px;font-size:12px}",
+			".dss-case-tabs{display:flex;gap:4px;padding:2px 0 6px;overflow-x:auto;scrollbar-width:thin}",
+			".dss-case-tab{flex:none;background:transparent;color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l2,#3a3b40);border-radius:999px;padding:3px 9px;cursor:pointer;font-size:var(--dsh-content-font-size,14px);white-space:nowrap}",
+			".dss-case-tab:hover{background:var(--dsw-alias-interactive-bg-hover)}",
+			".dss-case-tab-on{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-state-business-primary);background:var(--dsw-alias-interactive-bg-hover)}",
 			".dss-page-tabs{display:flex;gap:2px;padding:4px 0 0;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3b40);flex-wrap:wrap}",
 			".dss-page .dss-panel{position:static;width:100%;max-height:none;box-shadow:none;border:0;background:0 0}",
 			".dss-panel{position:fixed;top:48px;right:20px;z-index:120;box-sizing:border-box;width:min(1000px,calc(100vw - 40px));max-height:min(84vh,900px);overflow:hidden;border-radius:14px;background:var(--dsw-alias-bg-layer-1,#1f2024);color:var(--dsw-alias-label-primary,#eee);border:1px solid var(--dsw-alias-border-l2,#3a3b40);box-shadow:0 20px 60px rgba(0,0,0,.5);font-size:12px;line-height:1.55;display:flex;flex-direction:column}",
@@ -902,46 +906,67 @@ window.__ModuleLoader__.load({
 				type: "button",
 				className: "dss-trigger",
 				title: "打开军机处看板",
-				onClick: () => openBoard(board.caseId),
+				onClick: () => openBoard(),
 			}, h("span", { className: "dss-dot dss-dot-open" }), h("span", null, "三省六部·军机处"));
 		}
 
-		function SanshengRightTitle(props) {
-			const tab = props.useTabInfo?.();
-			const caseId = tab?.tab?.navigation?.params?.caseId;
-			return h("span", null, "军机处看板" + (caseId === undefined ? "" : " #" + String(caseId)));
+		function SanshengRightTitle() {
+			return h("span", null, "军机处看板");
 		}
 
-		function ArchivedCasePanel(props) {
-			const { entry } = props;
+		function archivedBoardFromEntry(entry) {
 			const snapshot = entry.snapshot ?? {};
-			const board = {
+			const gates = Array.isArray(snapshot.gates) ? snapshot.gates : [];
+			const closure = snapshot.closure ?? (entry.outcome === "closed"
+				? { conclusions: entry.conclusions, deliverables: [], unknowns: [], closedBy: "lead", createdAt: null }
+				: null);
+			return {
 				active: false,
 				caseId: entry.caseId,
+				phase: "archived",
 				intake: snapshot.intake ?? null,
 				edict: snapshot.edict ?? (entry.goal === null ? null : { goal: entry.goal, tier: entry.tier, acceptance: [], departments: [], rosterCap: 0, revision: 0 }),
-				appointments: snapshot.appointments ?? [],
-				gates: snapshot.gates ?? [],
-				evidence: snapshot.evidence ?? [],
-				audits: snapshot.audits ?? [],
+				appointments: Array.isArray(snapshot.appointments) ? snapshot.appointments : [],
+				gates,
+				evidence: Array.isArray(snapshot.evidence) ? snapshot.evidence : [],
+				audits: Array.isArray(snapshot.audits) ? snapshot.audits : [],
 				approvals: [],
-				closure: snapshot.closure ?? (entry.outcome === "closed" ? { conclusions: entry.conclusions } : null),
+				closure,
 				abandoned: snapshot.abandoned ?? (entry.abandonedReason === null ? null : { reason: entry.abandonedReason }),
 				cases: [],
-				phase: "archived",
+				history: Array.isArray(snapshot.history) ? snapshot.history : [],
+				revision: entry.revision ?? 0,
+				planRounds: 1 + gates.filter((gate) => gate.kind === "plan" && gate.verdict === "reject").length,
+				resultRounds: 1 + gates.filter((gate) => gate.kind === "result" && gate.verdict === "reject").length,
+			};
+		}
+
+		function CaseTabs(props) {
+			const { board, selectedCaseId, onSelect } = props;
+			const current = Number(board.caseId ?? 1);
+			const cases = Array.isArray(board.cases) ? board.cases.slice().reverse() : [];
+			const label = (entry) => {
+				const outcome = entry.outcome === "closed" ? "已结案" : entry.outcome === "abandoned" ? "已中止" : "已归档";
+				return "#" + String(entry.caseId) + " " + outcome;
 			};
 			return h(
 				"div",
-				{ className: "dss-right" },
-				h("div", { className: "dss-right-head" },
-					h("strong", null, "三省六部·军机处"),
-					h("span", { className: "dss-muted" }, "案卷 #" + String(entry.caseId) + " · 已归档 · " + (entry.outcome === "closed" ? "已结案" : entry.outcome === "abandoned" ? "已中止" : "已归档")),
-				),
-				h("div", { className: "dss-section" }, h("h4", null, "接旨 · 中书省"), h(IntakeCard, { intake: board.intake })),
-				h("div", { className: "dss-section" }, h("h4", null, "制敕 · 中书省"), h(EdictCard, { edict: board.edict })),
-				h("div", { className: "dss-section" }, h("h4", null, "审议"), h(GatesTab, { board })),
-				h("div", { className: "dss-section" }, h("h4", null, "证据"), h(EvidenceTab, { board })),
-				h("div", { className: "dss-section" }, h("h4", null, "结案"), h(ClosureSummary, { board })),
+				{ className: "dss-case-tabs", role: "tablist", "aria-label": "案卷" },
+				h("button", {
+					type: "button",
+					role: "tab",
+					"aria-selected": selectedCaseId === current,
+					className: "dss-case-tab" + (selectedCaseId === current ? " dss-case-tab-on" : ""),
+					onClick: () => onSelect(current),
+				}, "#" + String(current) + " 最新"),
+				cases.map((entry) => h("button", {
+					type: "button",
+					role: "tab",
+					key: "case-tab-" + String(entry.caseId),
+					"aria-selected": selectedCaseId === Number(entry.caseId),
+					className: "dss-case-tab" + (selectedCaseId === Number(entry.caseId) ? " dss-case-tab-on" : ""),
+					onClick: () => onSelect(Number(entry.caseId)),
+				}, label(entry))),
 			);
 		}
 
@@ -952,25 +977,34 @@ window.__ModuleLoader__.load({
 			const board = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sansheng);
 			const team = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.agentTeam);
 			const detail = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sanshengHistory);
-			const tabInfo = props.useTabInfo?.();
-			const targetCaseId = tabInfo?.tab?.navigation?.params?.caseId;
+			const [selectedCaseId, setSelectedCaseId] = react.useState(null);
 			const [tab, setTab] = react.useState("overview");
+			const currentCaseId = board === undefined || board === null ? null : Number(board.caseId ?? 1);
+			react.useEffect(() => {
+				if (currentCaseId !== null) {
+					setSelectedCaseId(currentCaseId);
+					setTab("overview");
+				}
+			}, [currentCaseId]);
 			if (board === undefined || board === null) {
 				return h("div", { className: "dss-right" }, h("p", { className: "dss-empty" }, "当前会话没有三省六部看板。"));
 			}
-			if (targetCaseId !== undefined && Number(targetCaseId) !== Number(board.caseId)) {
-				const archived = Array.isArray(board.cases) ? board.cases.find((entry) => Number(entry.caseId) === Number(targetCaseId)) : null;
-				if (archived !== undefined && archived !== null) return h(ArchivedCasePanel, { entry: archived });
-			}
-			const tabs = [
-				["overview", "总览"],
-				["tasks", "任务"],
-				["gates", "审议"],
-				["evidence", "证据"],
-				["timeline", "时间线"],
-				["history", "历史"],
-			];
+			const selected = selectedCaseId ?? Number(board.caseId ?? 1);
+			const isCurrent = selected === Number(board.caseId ?? 1);
+			const entry = isCurrent ? null : (Array.isArray(board.cases) ? board.cases.find((item) => Number(item.caseId) === selected) : null);
+			const archivedBoard = entry === null || entry === undefined ? null : archivedBoardFromEntry(entry);
+			const archivedTasks = entry === null || entry === undefined || entry.snapshot === null || entry.snapshot === undefined || !Array.isArray(entry.snapshot.tasks) ? [] : entry.snapshot.tasks;
+			const tabs = archivedBoard === null
+				? [["overview", "总览"], ["tasks", "任务"], ["gates", "审议"], ["evidence", "证据"], ["timeline", "时间线"], ["history", "历史"]]
+				: [["overview", "总览"], ["tasks", "任务"], ["gates", "审议"], ["evidence", "证据"], ["timeline", "时间线"]];
 			const render = () => {
+				if (archivedBoard !== null) {
+					if (tab === "tasks") return h(TasksTab, { board: archivedBoard, team: { tasks: archivedTasks } });
+					if (tab === "gates") return h(GatesTab, { board: archivedBoard });
+					if (tab === "evidence") return h(EvidenceTab, { board: archivedBoard });
+					if (tab === "timeline") return h(TimelineTab, { board: archivedBoard });
+					return h(OverviewTab, { board: archivedBoard, team: { tasks: archivedTasks } });
+				}
 				if (tab === "tasks") return h(TasksTab, { board, team });
 				if (tab === "gates") return h(GatesTab, { board });
 				if (tab === "evidence") return h(EvidenceTab, { board });
@@ -978,13 +1012,24 @@ window.__ModuleLoader__.load({
 				if (tab === "history") return h(HistoryTab, { detail });
 				return h(OverviewTab, { board, team });
 			};
+			const subtitle = archivedBoard === null
+				? "案卷 #" + String(board.caseId ?? 1) + " · rev " + String(board.revision ?? 0)
+				: "案卷 #" + String(entry.caseId) + " · 已归档 · " + (entry.outcome === "closed" ? "已结案" : entry.outcome === "abandoned" ? "已中止" : "已归档");
 			return h(
 				"div",
 				{ className: "dss-right" },
 				h("div", { className: "dss-right-head" },
 					h("strong", null, "三省六部·军机处"),
-					h("span", { className: "dss-muted" }, "案卷 #" + String(board.caseId ?? 1) + " · rev " + String(board.revision ?? 0)),
+					h("span", { className: "dss-muted" }, subtitle),
 				),
+				h(CaseTabs, {
+					board,
+					selectedCaseId: selected,
+					onSelect: (caseId) => {
+						setSelectedCaseId(caseId);
+						setTab("overview");
+					},
+				}),
 				h("div", { className: "dss-page-tabs", role: "tablist" }, tabs.map(([key, label]) => h("button", {
 					key,
 					role: "tab",
@@ -1075,8 +1120,8 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			ctx.effect(() => ensureStyle(), "sansheng: board style");
 			const actions = {
-				openBoard(caseId) {
-					ctx.sidebarRight.openTab("sansheng", { params: caseId === undefined ? undefined : { caseId } });
+				openBoard() {
+					ctx.sidebarRight.openTab("sansheng");
 				},
 			};
 			ctx.slots.inject("conversation.session.header.utilities", () =>
@@ -1093,7 +1138,6 @@ window.__ModuleLoader__.load({
 			ctx.effect(() => ctx.sidebarRightTabs.register({
 				id: "sansheng",
 				kind: "sansheng",
-				multiple: true,
 				priority: "extension",
 				title: () => "军机处看板",
 				guide: [{

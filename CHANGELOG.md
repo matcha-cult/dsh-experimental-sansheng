@@ -4,6 +4,24 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.9] — 2026-10-20
+
+### Added
+
+- **Panel-internal case tabs**: one 军机处看板 tab now carries 案卷 #N tabs
+  (默认最新). Closing the outer tab and reopening it preserves every case.
+- Archived cases now keep their **Team task snapshot** and **timeline slice**, so
+  switching to an old case exposes its 任务 and 时间线 views (plus 总览/审议/证据).
+- Cases closed or abandoned capture task snapshots in the close/abandon record;
+  the next case archives them.
+
+### Changed
+
+- The outer right-sidebar tab is single again; per-case navigation moves inside
+  the panel as requested.
+- Archived cases from before 0.0.9 have no task/time-line snapshot and show an
+  empty state for those two views.
+
 ## [0.0.8] — 2026-10-20
 
 ### Added

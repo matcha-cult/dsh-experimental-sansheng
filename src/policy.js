@@ -146,6 +146,7 @@ export function createEmptyState() {
     active: false,
     edict: null,
     intake: null,
+    caseTasks: [],
     appointments: [],
     gates: [],
     evidence: [],
@@ -242,6 +243,42 @@ function recordTime(record, eventTime, fallback) {
  * @returns {object} Next board state.
  */
 /**
+ * Keep only the UI-relevant fields of a Team task, bounded per case.
+ * @param {unknown} value Raw task list.
+ * @returns {Array<object>} Normalized task snapshot.
+ */
+function normalizeTaskSnapshot(value) {
+  if (!Array.isArray(value)) return []
+  return value
+    .filter((task) => task !== null && typeof task === 'object' && typeof task.id === 'string')
+    .slice(0, 100)
+    .map((task) => ({
+      id: task.id,
+      subject: typeof task.subject === 'string' ? task.subject : null,
+      status: typeof task.status === 'string' ? task.status : null,
+      ownerName: typeof task.ownerName === 'string' ? task.ownerName : null,
+      writeScopes: Array.isArray(task.writeScopes) ? task.writeScopes.filter((scope) => typeof scope === 'string') : [],
+    }))
+}
+
+/**
+ * The current case's history slice: from the most recent new-case marker.
+ * @param {unknown} history Board history.
+ * @returns {Array<object>} Current-case timeline, bounded by MAX_HISTORY.
+ */
+function currentCaseHistory(history) {
+  const list = Array.isArray(history) ? history : []
+  let start = 0
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (list[index]?.op === 'mode' && list[index]?.newCase === true) {
+      start = index
+      break
+    }
+  }
+  return list.slice(start).slice(-MAX_HISTORY)
+}
+
+/**
  * Archive the current sequential case as a compact summary. The full event log
  * remains the audit source; this summary only powers the board's case history.
  * @param {object} state Board state ending a case.
@@ -267,6 +304,8 @@ function archiveCurrentCase(state) {
       audits: state.audits,
       closure: state.closure,
       abandoned: state.abandoned,
+      tasks: state.caseTasks ?? [],
+      history: currentCaseHistory(state.history),
     },
   }
   return [...(state.cases ?? []), entry].slice(-MAX_CASES)
@@ -295,6 +334,7 @@ export function applyRecord(state, record, eventTime = null) {
               evidence: [],
               audits: [],
               approvals: [],
+              caseTasks: [],
               caseId: nextCaseId,
               cases,
             }, revision),
@@ -311,6 +351,7 @@ export function applyRecord(state, record, eventTime = null) {
         )
       }
       const patch = { active: false }
+      if (record.tasks !== undefined) patch.caseTasks = normalizeTaskSnapshot(record.tasks)
       if (typeof record.abandoned === 'string' && record.abandoned.trim() !== '') {
         patch.abandoned = {
           reason: record.abandoned.trim(),
@@ -413,7 +454,7 @@ export function applyRecord(state, record, eventTime = null) {
       const closure = normalizeStoredClosure(record.closure)
       if (closure === null) return state
       return withHistory(
-        commit(state, { closure }, revision),
+        commit(state, { closure, caseTasks: normalizeTaskSnapshot(record.tasks) }, revision),
         { op: 'close', rev: revision, at: recordTime(record, eventTime, closure.createdAt), by: closure.closedBy, conclusions: closure.conclusions },
       )
     }
