@@ -16,20 +16,23 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 
 		/** Browser services required by the header action. */
-		const inject = ["slots", "sidebarRightTabs"];
+		const inject = ["slots", "sidebarRight", "sidebarRightTabs"];
 
 		const TAG = "dsh-experimental-sansheng";
 
 		const CSS = [
 			".dss-root{display:inline-flex;align-items:center}",
-			".dss-trigger{min-height:28px;background:0 0;border:0;border-radius:6px;color:var(--dsw-alias-label-tertiary);cursor:pointer;align-items:center;gap:6px;padding:3px 7px;font-size:12px;display:inline-flex}",
+			".dss-trigger{min-height:28px;background:0 0;border:0;border-radius:6px;color:var(--dsw-alias-label-tertiary);cursor:pointer;align-items:center;gap:6px;padding:3px 7px;font-size:var(--dsh-content-font-size,14px);display:inline-flex}",
 			".dss-trigger:hover,.dss-trigger:focus-visible{color:var(--dsw-alias-label-primary)}",
 			".dss-dot{width:7px;height:7px;border-radius:50%;background:var(--dsw-alias-label-caption);flex:none}",
 			".dss-dot-pass{background:var(--dsw-alias-state-success-primary,#3fb950)}",
 			".dss-dot-open{background:var(--dsw-alias-state-business-primary,#4c8dff)}",
 			".dss-dot-warn{background:var(--dsw-alias-state-error-primary,#f85149)}",
 			".dss-count{color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums}",
-			".dss-right{box-sizing:border-box;height:100%;overflow:auto;padding:4px 10px 20px;color:var(--dsw-alias-label-primary)}",
+			".dss-right{box-sizing:border-box;height:100%;overflow:auto;padding:4px 10px 20px;color:var(--dsw-alias-label-primary);font-size:var(--dsh-content-font-size,14px)}",
+			".dss-right *{font-size:inherit!important}",
+			".dss-page{font-size:var(--dsh-content-font-size,14px)}",
+			".dss-page *{font-size:inherit!important}",
 			".dss-right-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:4px 2px 8px}",
 			".dss-right-head strong{font-size:13px}",
 			".dss-page{box-sizing:border-box;width:100%;height:100%;overflow:auto;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);padding:24px 28px 48px}",
@@ -864,6 +867,20 @@ window.__ModuleLoader__.load({
 			return target;
 		}
 
+		function SanshengCornerAction(props) {
+			const { sessionId, useSession, useSessions, openBoard } = props;
+			const parentId = useSession((snapshot) => snapshot?.subagent?.address?.parentSessionId);
+			const leadSessionId = parentId ?? sessionId;
+			const board = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sansheng);
+			if (board === undefined || board === null || board.active !== true) return null;
+			return h("button", {
+				type: "button",
+				className: "dss-trigger",
+				title: "打开军机处看板",
+				onClick: () => openBoard(),
+			}, h("span", { className: "dss-dot dss-dot-open" }), h("span", null, "军机处"));
+		}
+
 		function SanshengRightTitle() {
 			return h("span", null, "军机处");
 		}
@@ -991,6 +1008,22 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			ctx.effect(() => ensureStyle(), "sansheng: board style");
+			const actions = {
+				openBoard() {
+					ctx.sidebarRight.openTab("sansheng");
+				},
+			};
+			ctx.slots.inject("conversation.session.header.utilities", () =>
+				ctx.slots.register(
+					{
+						name: "conversation.session.header.utilities",
+						id: "sansheng",
+						order: -5,
+						inject: () => actions,
+					},
+					SanshengCornerAction,
+				),
+			);
 			ctx.effect(() => ctx.sidebarRightTabs.register({
 				id: "sansheng",
 				kind: "sansheng",

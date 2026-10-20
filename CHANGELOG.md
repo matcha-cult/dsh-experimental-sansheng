@@ -4,6 +4,22 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.5] — 2026-10-20
+
+### Added
+
+- A 军机处 shortcut in the session header utilities (the green-box area beside
+  the background-task control); clicking it opens the current session's board
+  in the right sidebar via `ctx.sidebarRight.openTab("sansheng")`.
+- The board panel now takes its font size from the Web UI setting:
+  `font-size: var(--dsh-content-font-size, 14px)` on the panel and
+  `font-size: inherit !important` for descendants, so all panel text follows
+  the user's configured UI size (14px by default).
+
+### Changed
+
+- The right-sidebar guide card remains as a second entry.
+
 ## [0.0.4] — 2026-10-20
 
 ### Changed
