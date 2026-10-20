@@ -196,6 +196,7 @@ function stateSchema() {
       abandonedReason: zod.string().nullable(),
       revision: zod.number(),
       at: zod.number().nullable(),
+      snapshot: zod.any().nullable(),
     })),
     history: zod.array(zod.any()),
     updatedAt: zod.number().nullable(),

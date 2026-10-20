@@ -4,6 +4,21 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.8] — 2026-10-20
+
+### Added
+
+- Case-per-tab browsing: the 军机处 tab type is now `multiple`, and the header
+  shortcut opens a tab parameterized by `caseId`. Old case tabs remain open and
+  are labeled 军机处看板 #N.
+- Archived cases keep a compact board snapshot (intake/edict/gates/evidence/
+  closure) so a previous case can be browsed after a new case starts.
+
+### Changed
+
+- Opening the board for a new case no longer replaces the previous case tab;
+  it opens a new tab.
+
 ## [0.0.7] — 2026-10-20
 
 ### Added

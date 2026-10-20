@@ -258,6 +258,16 @@ function archiveCurrentCase(state) {
     abandonedReason: state.abandoned?.reason ?? null,
     revision: state.revision,
     at: state.updatedAt,
+    snapshot: {
+      intake: state.intake,
+      edict: state.edict,
+      appointments: state.appointments,
+      gates: state.gates,
+      evidence: state.evidence,
+      audits: state.audits,
+      closure: state.closure,
+      abandoned: state.abandoned,
+    },
   }
   return [...(state.cases ?? []), entry].slice(-MAX_CASES)
 }
@@ -690,6 +700,7 @@ export function summarizeBoard(state, tasks = []) {
       abandonedReason: entry.abandonedReason,
       revision: entry.revision,
       at: entry.at,
+      snapshot: entry.snapshot ?? null,
     })),
     revision: state.revision,
     updatedAt: state.updatedAt,

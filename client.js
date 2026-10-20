@@ -902,12 +902,47 @@ window.__ModuleLoader__.load({
 				type: "button",
 				className: "dss-trigger",
 				title: "打开军机处看板",
-				onClick: () => openBoard(),
+				onClick: () => openBoard(board.caseId),
 			}, h("span", { className: "dss-dot dss-dot-open" }), h("span", null, "三省六部·军机处"));
 		}
 
-		function SanshengRightTitle() {
-			return h("span", null, "军机处看板");
+		function SanshengRightTitle(props) {
+			const tab = props.useTabInfo?.();
+			const caseId = tab?.tab?.navigation?.params?.caseId;
+			return h("span", null, "军机处看板" + (caseId === undefined ? "" : " #" + String(caseId)));
+		}
+
+		function ArchivedCasePanel(props) {
+			const { entry } = props;
+			const snapshot = entry.snapshot ?? {};
+			const board = {
+				active: false,
+				caseId: entry.caseId,
+				intake: snapshot.intake ?? null,
+				edict: snapshot.edict ?? (entry.goal === null ? null : { goal: entry.goal, tier: entry.tier, acceptance: [], departments: [], rosterCap: 0, revision: 0 }),
+				appointments: snapshot.appointments ?? [],
+				gates: snapshot.gates ?? [],
+				evidence: snapshot.evidence ?? [],
+				audits: snapshot.audits ?? [],
+				approvals: [],
+				closure: snapshot.closure ?? (entry.outcome === "closed" ? { conclusions: entry.conclusions } : null),
+				abandoned: snapshot.abandoned ?? (entry.abandonedReason === null ? null : { reason: entry.abandonedReason }),
+				cases: [],
+				phase: "archived",
+			};
+			return h(
+				"div",
+				{ className: "dss-right" },
+				h("div", { className: "dss-right-head" },
+					h("strong", null, "三省六部·军机处"),
+					h("span", { className: "dss-muted" }, "案卷 #" + String(entry.caseId) + " · 已归档 · " + (entry.outcome === "closed" ? "已结案" : entry.outcome === "abandoned" ? "已中止" : "已归档")),
+				),
+				h("div", { className: "dss-section" }, h("h4", null, "接旨 · 中书省"), h(IntakeCard, { intake: board.intake })),
+				h("div", { className: "dss-section" }, h("h4", null, "制敕 · 中书省"), h(EdictCard, { edict: board.edict })),
+				h("div", { className: "dss-section" }, h("h4", null, "审议"), h(GatesTab, { board })),
+				h("div", { className: "dss-section" }, h("h4", null, "证据"), h(EvidenceTab, { board })),
+				h("div", { className: "dss-section" }, h("h4", null, "结案"), h(ClosureSummary, { board })),
+			);
 		}
 
 		function SanshengRightPanel(props) {
@@ -917,9 +952,15 @@ window.__ModuleLoader__.load({
 			const board = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sansheng);
 			const team = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.agentTeam);
 			const detail = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sanshengHistory);
+			const tabInfo = props.useTabInfo?.();
+			const targetCaseId = tabInfo?.tab?.navigation?.params?.caseId;
 			const [tab, setTab] = react.useState("overview");
 			if (board === undefined || board === null) {
 				return h("div", { className: "dss-right" }, h("p", { className: "dss-empty" }, "当前会话没有三省六部看板。"));
+			}
+			if (targetCaseId !== undefined && Number(targetCaseId) !== Number(board.caseId)) {
+				const archived = Array.isArray(board.cases) ? board.cases.find((entry) => Number(entry.caseId) === Number(targetCaseId)) : null;
+				if (archived !== undefined && archived !== null) return h(ArchivedCasePanel, { entry: archived });
 			}
 			const tabs = [
 				["overview", "总览"],
@@ -1034,8 +1075,8 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			ctx.effect(() => ensureStyle(), "sansheng: board style");
 			const actions = {
-				openBoard() {
-					ctx.sidebarRight.openTab("sansheng");
+				openBoard(caseId) {
+					ctx.sidebarRight.openTab("sansheng", { params: caseId === undefined ? undefined : { caseId } });
 				},
 			};
 			ctx.slots.inject("conversation.session.header.utilities", () =>
@@ -1052,6 +1093,7 @@ window.__ModuleLoader__.load({
 			ctx.effect(() => ctx.sidebarRightTabs.register({
 				id: "sansheng",
 				kind: "sansheng",
+				multiple: true,
 				priority: "extension",
 				title: () => "军机处看板",
 				guide: [{
