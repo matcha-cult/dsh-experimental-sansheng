@@ -16,7 +16,7 @@ window.__ModuleLoader__.load({
 		let react = require("react");
 
 		/** Browser services required by the header action. */
-		const inject = ["slots", "layout"];
+		const inject = ["slots", "sidebarRightTabs"];
 
 		const TAG = "dsh-experimental-sansheng";
 
@@ -29,6 +29,9 @@ window.__ModuleLoader__.load({
 			".dss-dot-open{background:var(--dsw-alias-state-business-primary,#4c8dff)}",
 			".dss-dot-warn{background:var(--dsw-alias-state-error-primary,#f85149)}",
 			".dss-count{color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums}",
+			".dss-right{box-sizing:border-box;height:100%;overflow:auto;padding:4px 10px 20px;color:var(--dsw-alias-label-primary)}",
+			".dss-right-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;padding:4px 2px 8px}",
+			".dss-right-head strong{font-size:13px}",
 			".dss-page{box-sizing:border-box;width:100%;height:100%;overflow:auto;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);padding:24px 28px 48px}",
 			".dss-page-inner{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:16px}",
 			".dss-page-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--dsw-alias-border-l1,#2f3033)}",
@@ -861,6 +864,55 @@ window.__ModuleLoader__.load({
 			return target;
 		}
 
+		function SanshengRightTitle() {
+			return h("span", null, "军机处");
+		}
+
+		function SanshengRightPanel(props) {
+			const { sessionId, useSession, useSessions } = props;
+			const parentId = useSession((snapshot) => snapshot?.subagent?.address?.parentSessionId);
+			const leadSessionId = parentId ?? sessionId;
+			const board = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sansheng);
+			const team = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.agentTeam);
+			const detail = useSessions((state) => state?.projectionsBySession?.[leadSessionId]?.values?.sanshengHistory);
+			const [tab, setTab] = react.useState("overview");
+			if (board === undefined || board === null) {
+				return h("div", { className: "dss-right" }, h("p", { className: "dss-empty" }, "当前会话没有三省六部看板。"));
+			}
+			const tabs = [
+				["overview", "总览"],
+				["tasks", "任务"],
+				["gates", "审议"],
+				["evidence", "证据"],
+				["timeline", "时间线"],
+				["history", "历史"],
+			];
+			const render = () => {
+				if (tab === "tasks") return h(TasksTab, { board, team });
+				if (tab === "gates") return h(GatesTab, { board });
+				if (tab === "evidence") return h(EvidenceTab, { board });
+				if (tab === "timeline") return h(TimelineTab, { board });
+				if (tab === "history") return h(HistoryTab, { detail });
+				return h(OverviewTab, { board, team });
+			};
+			return h(
+				"div",
+				{ className: "dss-right" },
+				h("div", { className: "dss-right-head" },
+					h("strong", null, "军机处"),
+					h("span", { className: "dss-muted" }, "案卷 #" + String(board.caseId ?? 1) + " · rev " + String(board.revision ?? 0)),
+				),
+				h("div", { className: "dss-page-tabs", role: "tablist" }, tabs.map(([key, label]) => h("button", {
+					key,
+					role: "tab",
+					"aria-selected": tab === key,
+					className: "dss-tab" + (tab === key ? " dss-tab-on" : ""),
+					onClick: () => setTab(key),
+				}, label))),
+				h("div", { style: { paddingTop: "6px" } }, render()),
+			);
+		}
+
 		function SanshengHeaderAction(props) {
 			const { sessionId, useSession, useSessions, openBoard } = props;
 			const parentId = useSession((snapshot) => snapshot?.subagent?.address?.parentSessionId);
@@ -939,30 +991,35 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			ctx.effect(() => ensureStyle(), "sansheng: board style");
-			const actions = {
-				openBoard(sessionId) {
-					setBoardTarget(sessionId);
-					ctx.layout.selectPanel("sansheng");
-				},
-			};
-			ctx.slots.inject("conversation.session.header.actions", () =>
+			ctx.effect(() => ctx.sidebarRightTabs.register({
+				id: "sansheng",
+				kind: "sansheng",
+				priority: "extension",
+				title: () => "军机处",
+				guide: [{
+					id: "open",
+					order: 30,
+					title: () => "军机处",
+					description: () => "查看当前会话的三省六部案卷",
+					icon: SanshengIcon,
+				}],
+			}), "sansheng: right sidebar type");
+			ctx.slots.inject("sidebar.right.pane.tab", () =>
 				ctx.slots.register(
 					{
-						name: "conversation.session.header.actions",
-						id: "sansheng",
-						order: -10,
-						inject: () => actions,
-					},
-					SanshengHeaderAction,
-				),
-			);
-			ctx.slots.inject("main", () =>
-				ctx.slots.register(
-					{
-						name: "main",
+						name: "sidebar.right.pane.tab",
 						key: "sansheng",
 					},
-					(props) => h(SanshengPage, { ...props, onClose: () => ctx.layout.selectPanel(null) }),
+					SanshengRightPanel,
+				),
+			);
+			ctx.slots.inject("sidebar.right.pane.tab.title", () =>
+				ctx.slots.register(
+					{
+						name: "sidebar.right.pane.tab.title",
+						key: "sansheng",
+					},
+					SanshengRightTitle,
 				),
 			);
 		}

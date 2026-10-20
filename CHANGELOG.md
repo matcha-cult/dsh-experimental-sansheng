@@ -4,6 +4,17 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.4] — 2026-10-20
+
+### Changed
+
+- 军机处 is now a **right-sidebar guide card + tab**, contributed by the
+  session-scoped `sidebar.right.tab.guide.entry` and opened as a
+  `sidebar.right.pane.tab`. It sits beside 工作区文件 / 新建终端 and shows the
+  current session's board; no header button, global sidebar entry or floating
+  overlay.
+- Tabs inside the right panel: 总览/任务/审议/证据/时间线/历史.
+
 ## [0.0.3] — 2026-10-20
 
 ### Changed
