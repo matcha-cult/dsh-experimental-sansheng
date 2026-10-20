@@ -4,6 +4,17 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.10] — 2026-10-21
+
+### Fixed
+
+- Restore **README.md** as the default **Simplified Chinese** README (the
+  0.0.2 release had accidentally replaced it with the English text). The
+  English version remains `README.en.md`, linked from the Chinese header.
+- Bring the Chinese README up to date with 0.0.9 behavior: intake, internal
+  case tabs, archived tasks/timeline, header shortcut, right-sidebar entry and
+  UI font sizing.
+
 ## [0.0.9] — 2026-10-20
 
 ### Added
