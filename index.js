@@ -40,6 +40,7 @@ import {
   validateEdictInput,
   validateEvidenceInput,
   validateGateInput,
+  validateIntakeInput,
   validateModeAction,
   validateTriageInput,
 } from './src/policy.js'
@@ -159,6 +160,18 @@ function stateSchema() {
   return zod.object({
     active: zod.boolean(),
     edict: edict.nullable(),
+    intake: zod.object({
+      id: zod.string(),
+      request: zod.string(),
+      intent: zod.string(),
+      nonGoals: zod.array(zod.string()),
+      ambiguities: zod.array(zod.string()),
+      needsClarification: zod.boolean(),
+      clarificationQuestion: zod.string().nullable(),
+      by: zod.string(),
+      rev: zod.number().nullable(),
+      createdAt: zod.number().nullable(),
+    }).nullable(),
     appointments: zod.array(appointment),
     gates: zod.array(gate),
     evidence: zod.array(evidence),
@@ -549,6 +562,46 @@ export function apply(ctx, config = {}) {
         payload.reason = normalized.reason ?? 'trivial task'
       }
       return serializeRecord('mode', payload)
+    },
+  })
+
+  registerTool({
+    name: 'sansheng_intake',
+    description: '接旨: record the user request and normalize the intent before drafting the edict. Lead-only. If ambiguities remain, set needs_clarification=true with a clarification_question, ask the user, then call sansheng_intake again with needs_clarification=false. An active mode cannot draft an edict without this intake.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        request: { type: 'string', description: 'The user request restated in the user\'s own terms.' },
+        intent: { type: 'string', description: 'Normalized goal: what the user actually wants delivered.' },
+        non_goals: { type: 'array', items: { type: 'string' }, description: 'Explicit non-goals / do-not-touch boundaries.' },
+        ambiguities: { type: 'array', items: { type: 'string' }, description: 'Unresolved ambiguities.' },
+        needs_clarification: { type: 'boolean', description: 'True while the Lead must ask the user before drafting.' },
+        clarification_question: { type: 'string', description: 'One concrete question for the user; required when needs_clarification=true.' },
+        expected_revision: { type: 'integer', description: 'Board revision read from sansheng_board.' },
+      },
+      required: ['request', 'intent', 'expected_revision'],
+    },
+    output: textOutput,
+    execute(args, exec) {
+      const agent = requireAgent(exec, 'sansheng_intake')
+      const caller = memberOf(agent)
+      const state = boardOf(agent)
+      const normalized = validateIntakeInput(boardView(agent), args, caller)
+      const revision = reserveRevision(agent)
+      const intake = {
+        id: `intake-${state.revision + 1}`,
+        request: normalized.request,
+        intent: normalized.intent,
+        nonGoals: normalized.nonGoals,
+        ambiguities: normalized.ambiguities,
+        needsClarification: normalized.needsClarification,
+        clarificationQuestion: normalized.clarificationQuestion,
+        by: caller.name,
+        rev: revision,
+        createdAt: Date.now(),
+      }
+      return serializeRecord('intake', { rev: revision, by: caller.name, intake })
     },
   })
 

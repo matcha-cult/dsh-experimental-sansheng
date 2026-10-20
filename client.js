@@ -196,6 +196,7 @@ window.__ModuleLoader__.load({
 		function opLabel(op) {
 			return ({
 				mode: "模式",
+				intake: "接旨",
 				edict: "拟旨",
 				appoint: "任命",
 				gate: "审议",
@@ -212,7 +213,7 @@ window.__ModuleLoader__.load({
 			if (entry.op === "gate") return entry.verdict === "pass" ? "dss-event-pass" : "dss-event-reject";
 			if (entry.op === "approval") return entry.decision === "approve" ? "dss-event-pass" : "dss-event-reject";
 			if (entry.op === "audit") return entry.verdict === "pass" ? "dss-event-pass" : "dss-event-reject";
-			if (entry.op === "mode" || entry.op === "edict" || entry.op === "appoint") return "dss-event-info";
+			if (entry.op === "mode" || entry.op === "intake" || entry.op === "edict" || entry.op === "appoint") return "dss-event-info";
 			return "";
 		}
 
@@ -223,6 +224,8 @@ window.__ModuleLoader__.load({
 					return entry.abandoned !== null && entry.abandoned !== undefined
 						? "离开模式并放弃：" + entry.abandoned
 						: entry.active === true ? "进入模式" : "离开模式";
+				case "intake":
+					return "接旨：" + String(entry.intent ?? "");
 				case "edict":
 					return "拟旨：第 " + String(entry.revisionNo ?? "?") + " 版 · " + String(entry.goal ?? "");
 				case "appoint":
@@ -285,6 +288,26 @@ window.__ModuleLoader__.load({
 			"tool-call": "调用",
 			"tool-result": "结果",
 		};
+
+		function IntakeCard(props) {
+			const { intake } = props;
+			if (intake === null || intake === undefined) {
+				return h("div", { className: "dss-card dss-empty" }, "尚未接旨：中书省（Lead）需要先用 sansheng_intake 记录用户意图。");
+			}
+			return h("div", { className: "dss-card" },
+				h("div", { className: "dss-row" }, h("strong", null, "用户原话"), h("span", { className: "dss-muted" }, intake.request)),
+				h("div", { className: "dss-row" }, h("strong", null, "归一化意图"), h("span", { className: "dss-muted" }, intake.intent)),
+				(Array.isArray(intake.nonGoals) && intake.nonGoals.length > 0)
+					? h("div", null, h("div", { className: "dss-row" }, h("strong", null, "非目标")), h("ul", { className: "dss-list" }, intake.nonGoals.map((item, index) => h("li", { key: "ng" + index }, item))))
+					: null,
+				(Array.isArray(intake.ambiguities) && intake.ambiguities.length > 0)
+					? h("div", null, h("div", { className: "dss-row" }, h("strong", null, "歧义")), h("ul", { className: "dss-list" }, intake.ambiguities.map((item, index) => h("li", { key: "am" + index }, item))))
+					: null,
+				intake.needsClarification === true
+					? h("div", { className: "dss-warn" }, "待用户澄清：" + String(intake.clarificationQuestion ?? "未提供问题"))
+					: null,
+			);
+		}
 
 		function EdictCard(props) {
 			const { edict } = props;
@@ -459,6 +482,7 @@ window.__ModuleLoader__.load({
 				),
 				h("div", { className: "dss-grid" },
 					h("div", null,
+						h("div", { className: "dss-section" }, h("h4", null, "接旨 · 中书省"), h(IntakeCard, { intake: board.intake })),
 						h("div", { className: "dss-section" }, h("h4", null, "制敕 · 中书省"), h(EdictCard, { edict: board.edict })),
 						h(Workstreams, { board }),
 						h("div", { className: "dss-section" }, h("h4", null, "派发 · 尚书省"), h(Appointments, { board })),

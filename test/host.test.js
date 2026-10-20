@@ -6,6 +6,7 @@ import { apply } from '../index.js'
 const MUTATING = new Set([
   'sansheng_mode',
   'sansheng_edict',
+  'sansheng_intake',
   'sansheng_appoint',
   'sansheng_gate',
   'sansheng_evidence',
@@ -170,6 +171,10 @@ function stateOf(h) {
 async function enterEdict(h, extra = {}) {
   const lead = h.leader
   await h.dispatch('sansheng_mode', { action: 'enter' }, lead)
+  await h.dispatch('sansheng_intake', {
+    request: 'g',
+    intent: 'g',
+  }, lead)
   await h.dispatch('sansheng_edict', {
     goal: 'g',
     acceptance: ['a'],
@@ -187,7 +192,7 @@ async function planPass(h, reviewer) {
   }, reviewer)
 }
 
-test('apply registers the project board, prompt section, and nine tools', () => {
+test('apply registers the project board, prompt section, and ten tools', () => {
   const h = harness()
   assert.equal(h.projection.key, 'sansheng')
   assert.equal(h.sections.length, 1)
@@ -202,6 +207,7 @@ test('apply registers the project board, prompt section, and nine tools', () => 
       'sansheng_edict',
       'sansheng_evidence',
       'sansheng_gate',
+      'sansheng_intake',
       'sansheng_mode',
       'sansheng_triage',
     ],
@@ -227,6 +233,7 @@ test('mode, edict, gates, appointment, evidence and close flow through the Lead 
   assert.equal(before.revision, 0)
 
   await h.dispatch('sansheng_mode', { action: 'enter' }, lead)
+  await h.dispatch('sansheng_intake', { request: 'ship the mode', intent: 'ship the mode' }, lead)
   await h.dispatch('sansheng_edict', {
     goal: 'ship the mode',
     acceptance: ['tests pass'],
@@ -272,6 +279,7 @@ test('mode, edict, gates, appointment, evidence and close flow through the Lead 
   const eventTypes = lead.session.events.map((event) => event.type)
   assert.deepEqual(eventTypes, [
     'tool/result', // mode enter
+    'tool/result', // intake
     'tool/result', // edict
     'user/message', // plan gate
     'tool/result', // appointment
@@ -415,6 +423,7 @@ test('a session composed from the 三省六部 preset starts active', async () =
   assert.equal(before.active, true)
   assert.equal(before.edict, null)
 
+  await h.dispatch('sansheng_intake', { request: 'preset flow', intent: 'preset flow' }, lead)
   await h.dispatch('sansheng_edict', { goal: 'preset flow', acceptance: ['board is active'], tier: 'medium', roster_cap: 5 }, lead)
   const after = JSON.parse(await h.dispatch('sansheng_board', {}, lead))
   assert.equal(after.edict.goal, 'preset flow')

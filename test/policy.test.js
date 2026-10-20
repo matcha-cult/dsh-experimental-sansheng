@@ -20,6 +20,7 @@ import {
   validateEdictInput,
   validateEvidenceInput,
   validateGateInput,
+  validateIntakeInput,
   validateModeAction,
   validateTriageInput,
 } from '../src/policy.js'
@@ -82,6 +83,20 @@ function baseEdict(overrides = {}) {
 
 function activeState(edict = baseEdict()) {
   let state = append(createEmptyState(), 'mode', { active: true })
+  state = append(state, 'intake', {
+    intake: {
+      id: 'intake-1',
+      request: 'please ship the change',
+      intent: 'ship the change',
+      nonGoals: [],
+      ambiguities: [],
+      needsClarification: false,
+      clarificationQuestion: null,
+      by: 'lead',
+      rev: state.revision + 1,
+      createdAt: null,
+    },
+  })
   state = append(state, 'edict', { edict })
   return state
 }
@@ -296,21 +311,23 @@ test('unknown and malformed events are ignored during replay', () => {
 
 test('a teammate message can carry a board record into the Lead log', () => {
   const state = activeState()
+  const rev = state.revision + 1
   const next = foldEvent(state, teammateMessage(marked(record('gate', {
     gate: {
       id: 'gate-9', kind: 'plan', verdict: 'reject', reviewer: 'menxia',
-      defects: ['no command'], checked: [], reviews: [], summary: null, rev: 3, createdAt: null,
+      defects: ['no command'], checked: [], reviews: [], summary: null, rev, createdAt: null,
     },
-  }, 3))))
+  }, rev))))
   assert.equal(latestGate(next, 'plan')?.verdict, 'reject')
   assert.deepEqual(latestGate(next, 'plan')?.defects, ['no command'])
 })
 
 test('the board keeps a bounded audit history and folds denied calls', () => {
   let state = activeState()
-  assert.equal(state.history.length, 2)
+  assert.equal(state.history.length, 3)
   assert.equal(state.history[0].op, 'mode')
-  assert.equal(state.history[1].op, 'edict')
+  assert.equal(state.history[1].op, 'intake')
+  assert.equal(state.history[2].op, 'edict')
   const denied = foldEvent(state, {
     type: 'tool/result',
     time: 1234567890,
@@ -732,6 +749,35 @@ test('evidence must reference a completed shared task and cannot repeat itself',
   assertCode(() => validateEvidenceInput(withEvidence, { ...args, expected_revision: withEvidence.revision }, TASKS), 'DUPLICATE_EVIDENCE')
 })
 
+/* Intake */
+
+test('intake records the normalized intent and blocks an unclear edict', () => {
+  const base = append(createEmptyState(), 'mode', { active: true })
+  assertCode(() => validateEdictInput(base, { goal: 'g', acceptance: ['a'], tier: 'medium', departments: ['工部'], expected_revision: base.revision }), 'INTENT_NOT_CAPTURED')
+  const unclear = append(base, 'intake', {
+    intake: {
+      id: 'intake-1', request: 'do the thing', intent: 'do the thing', nonGoals: [], ambiguities: ['which thing?'],
+      needsClarification: true, clarificationQuestion: 'Which thing?', by: 'lead', rev: base.revision + 1, createdAt: null,
+    },
+  })
+  assertCode(() => validateEdictInput(unclear, { goal: 'g', acceptance: ['a'], tier: 'medium', departments: ['工部'], expected_revision: unclear.revision }), 'USER_CLARIFICATION_REQUIRED')
+  const clear = append(unclear, 'intake', {
+    intake: {
+      id: 'intake-2', request: 'do the thing', intent: 'do the thing', nonGoals: [], ambiguities: [],
+      needsClarification: false, clarificationQuestion: null, by: 'lead', rev: unclear.revision + 1, createdAt: null,
+    },
+  })
+  assert.doesNotThrow(() => validateEdictInput(clear, { goal: 'g', acceptance: ['a'], tier: 'medium', departments: ['工部'], expected_revision: clear.revision }))
+})
+
+test('intake requires a question while clarification is needed', () => {
+  const state = append(createEmptyState(), 'mode', { active: true })
+  assertCode(() => validateIntakeInput(state, { request: 'r', intent: 'i', needs_clarification: true, expected_revision: state.revision }, LEAD), 'CLARIFICATION_QUESTION_REQUIRED')
+  const intake = validateIntakeInput(state, { request: ' r ', intent: ' i ', non_goals: ['n'], ambiguities: ['a'], needs_clarification: false, expected_revision: state.revision }, LEAD)
+  assert.equal(intake.request, 'r')
+  assert.deepEqual(intake.nonGoals, ['n'])
+})
+
 /* Risk, conditional approval and audit */
 
 test('high-risk edicts require explicit assumptions, risks, tools, data scope and budget', () => {
@@ -912,7 +958,8 @@ test('re-drafting the edict invalidates the plan gate', () => {
 const REPORT = { conclusions: ['done'], deliverables: ['src/a.js'] }
 
 test('closing is Lead-only, revision-guarded and requires both gates', () => {
-  assertCode(() => validateCloseInput(activeState(), { ...REPORT, expected_revision: 2 }, [], LEAD), 'PLAN_GATE_NOT_PASSED')
+  const unplanned = activeState()
+  assertCode(() => validateCloseInput(unplanned, { ...REPORT, expected_revision: unplanned.revision }, [], LEAD), 'PLAN_GATE_NOT_PASSED')
   const planned = planPass(activeState())
   assertCode(() => validateCloseInput(planned, { ...REPORT, expected_revision: planned.revision }, [], LEAD), 'RESULT_GATE_NOT_PASSED')
   assertCode(() => validateCloseInput(closedState(), { ...REPORT, expected_revision: closedState().revision + 1 }, [], WORKER), 'STALE_REVISION')

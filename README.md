@@ -99,6 +99,10 @@ The mode separates **decision, review and execution**, then turns good intention
 
 > **政事堂 is not a fourth department**: it is the Lead's coordinating seat. The same Lead switches hats between 中书省 (drafting) and 尚书省 (dispatch/summary); 门下省 is the genuinely independent reviewer.
 
+### Intake (intent recognition)
+
+The Lead first records the user's request, normalized intent, non-goals and ambiguities with `sansheng_intake`. If `needs_clarification=true`, the edict is blocked until the user answers and the intake is updated. The board shows 接旨 · 中书省.
+
 ### Four-level triage (adapted from 百官)
 
 Before drafting, call `sansheng_triage`; do not default to the full flow:
@@ -183,6 +187,7 @@ Any member can read `sansheng_board`; the Lead can also use `sansheng_mode {acti
 | Tool | Caller | Purpose |
 |---|---|---|
 | `sansheng_mode` | Lead (status: any member) | enter / leave / inspect the mode |
+| `sansheng_intake` | Lead | intake: verbatim request, normalized intent, non-goals, ambiguities; no edict until clarified |
 | `sansheng_edict` | Lead | goal, acceptance, boundaries, tier, roster, departments, assumptions, risks, tools, data scope, budget |
 | `sansheng_appoint` | Lead | appoint one teammate to one 部 |
 | `sansheng_gate` | independent teammate | plan/result verdict; rejection needs defects; a pass may carry conditions |

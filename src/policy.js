@@ -38,7 +38,7 @@ const RECORD_MARKER = 'SANS_RECORD_V1'
 export const RECORD_VERSION = 1
 
 /** Record operations the board fold understands. */
-export const RECORD_OPS = Object.freeze(['mode', 'edict', 'appoint', 'gate', 'audit', 'evidence', 'close', 'board'])
+export const RECORD_OPS = Object.freeze(['mode', 'intake', 'edict', 'appoint', 'gate', 'audit', 'evidence', 'close', 'board'])
 
 /** Bounded audit history kept on the board for the timeline view. */
 export const MAX_HISTORY = 200
@@ -82,7 +82,7 @@ export const DEFAULT_SECTION = `You are in 三省六部 mode (Sān Shěng Liù B
 Every mutating tool takes expected_revision (the revision you last read from sansheng_board). A stale value is rejected — read the board again, do not guess. Every committed step increments the board revision.
 
 Procedure (all state is recorded in this session's event log — never coordinate through files or temp directories):
-0. Triage first: call sansheng_triage {task, requested_tier?, needs_independent_review, needs_plan_gate, needs_meta_review}. A tier explicitly requested by the user wins; the three questions only cross-check it. trivial: do not enter the mode (if a preset is active, call sansheng_mode {action:"skip"}); small: Lead plus one independent verifier, no plan gate and no ministry appointments; medium/large: the full flow below.
+0. 接旨 (intake): the Lead restates the user request and records the normalized intent with sansheng_intake {request, intent, non_goals, ambiguities, needs_clarification, clarification_question?, expected_revision}. If needs_clarification is true, ask the user and update the intake before drafting an edict. Then triage: sansheng_triage {task, requested_tier?, needs_independent_review, needs_plan_gate, needs_meta_review}. A tier explicitly requested by the user wins; the three questions only cross-check it. trivial: do not enter the mode (if a preset is active, call sansheng_mode {action:"skip"}); small: Lead plus one independent verifier, no plan gate and no ministry appointments; medium/large: the full flow below.
 The Lead wears two hats: 中书省 (receiving the emperor's intent and drafting the plan) and 尚书省 (dispatching after the gates and summarizing at close). 门下省 is an independent teammate; 政事堂 is the Lead's coordinating seat, not a fourth department. Ministry boundaries: 吏部=identity/permissions, 户部=budget/resources, 礼部=interaction/format, 兵部=security/incident, 刑部=audit/evidence, 工部=tools/infrastructure. These are responsibility boundaries, not a host sandbox.
 
 1. 中书省 (Lead, drafting hat) receives the intent and drafts the edict: sansheng_edict {goal, acceptance, boundaries, tier, roster_cap, departments, assumptions, risks, tools, data_scope, risk_level, budget}. High/irreversible risk requires assumptions, risks, tools, data_scope and budget.
@@ -145,6 +145,7 @@ export function createEmptyState() {
   return {
     active: false,
     edict: null,
+    intake: null,
     appointments: [],
     gates: [],
     evidence: [],
@@ -318,6 +319,14 @@ export function applyRecord(state, record, eventTime = null) {
           skipped: record.skipped === true,
           reason: typeof record.reason === 'string' ? record.reason : null,
         },
+      )
+    }
+    case 'intake': {
+      const intake = normalizeStoredIntake(record.intake)
+      if (intake === null) return state
+      return withHistory(
+        commit(state, { intake }, revision),
+        { op: 'intake', rev: revision, at: recordTime(record, eventTime, intake.createdAt), by: intake.by, request: intake.request, intent: intake.intent, needsClarification: intake.needsClarification },
       )
     }
     case 'edict': {
@@ -664,6 +673,14 @@ export function summarizeBoard(state, tasks = []) {
     active: state.active,
     phase: casePhase(state),
     caseId: state.caseId,
+    intake: state.intake === null ? null : {
+      request: state.intake.request,
+      intent: state.intake.intent,
+      nonGoals: state.intake.nonGoals,
+      ambiguities: state.intake.ambiguities,
+      needsClarification: state.intake.needsClarification,
+      clarificationQuestion: state.intake.clarificationQuestion,
+    },
     cases: (state.cases ?? []).map((entry) => ({
       caseId: entry.caseId,
       goal: entry.goal,
@@ -753,6 +770,10 @@ export function boardAlerts(state, tasks = [], now = Date.now()) {
     alerts.push(`案件已放弃：${state.abandoned.reason}。重新进入模式可继续。`)
   }
   if (state.closure !== null) return alerts
+  if (state.edict === null && state.intake === null) alerts.push('尚未接旨：先调用 sansheng_intake 记录用户意图。')
+  if (state.intake !== null && state.intake.needsClarification === true) {
+    alerts.push('意图有歧义：先询问用户，再更新 sansheng_intake（needs_clarification=false）。')
+  }
   if (state.edict === null) alerts.push('尚未拟旨：先调用 sansheng_edict。')
   const plan = latestGate(state, 'plan')
   const result = latestGate(state, 'result')
@@ -1015,6 +1036,35 @@ function currentWorkstreamIds(state) {
 }
 
 /**
+ * Validate one 接旨 (intake) record: the Lead restates the user's request and
+ * normalizes the goal before drafting an edict. This is the explicit,
+ * auditable intent-recognition step.
+ * @param {object} state Board state.
+ * @param {object} input Raw tool arguments.
+ * @param {{role: string, name: string}} caller Resolved Team membership.
+ * @returns {{request: string, intent: string, nonGoals: string[], ambiguities: string[], needsClarification: boolean, clarificationQuestion: string|null}} Normalized intake.
+ */
+export function validateIntakeInput(state, input, caller) {
+  assertExpectedRevision(state, input)
+  assertModeActive(state)
+  if (caller.role !== 'lead') fail('LEAD_ONLY', 'only the Lead (中书省) receives the user intent')
+  if (state.edict !== null) fail('INTAKE_AFTER_EDICT', 'the edict is already drafted; revise the edict instead of editing the intake')
+  const request = requiredString(input?.request, 'request', 4000)
+  const intent = requiredString(input?.intent, 'intent', 2000)
+  const nonGoals = stringList(input?.non_goals, 'non_goals', 0, 20)
+  const ambiguities = stringList(input?.ambiguities, 'ambiguities', 0, 20)
+  const needsClarification = input?.needs_clarification === undefined ? false : input.needs_clarification
+  if (typeof needsClarification !== 'boolean') fail('INVALID_FIELD', 'needs_clarification must be a boolean')
+  const questionRaw = input?.clarification_question === undefined || input.clarification_question === null
+    ? null
+    : requiredString(input.clarification_question, 'clarification_question', 2000)
+  if (needsClarification && questionRaw === null) {
+    fail('CLARIFICATION_QUESTION_REQUIRED', 'needs_clarification=true requires clarification_question')
+  }
+  return { request, intent, nonGoals, ambiguities, needsClarification, clarificationQuestion: needsClarification ? questionRaw : null }
+}
+
+/**
  * Validate and normalize an edict (制敕) draft.
  * @param {object} state Board state.
  * @param {object} input Raw tool arguments.
@@ -1022,6 +1072,14 @@ function currentWorkstreamIds(state) {
  */
 export function validateEdictInput(state, input) {
   assertExpectedRevision(state, input)
+  if (state.active === true) {
+    if (state.intake === null) {
+      fail('INTENT_NOT_CAPTURED', 'call sansheng_intake before drafting an edict')
+    }
+    if (state.intake.needsClarification === true) {
+      fail('USER_CLARIFICATION_REQUIRED', 'ask the user to resolve the recorded ambiguities, then update sansheng_intake with needs_clarification=false')
+    }
+  }
   const goal = requiredString(input?.goal, 'goal', 4000)
   const acceptance = stringList(input?.acceptance, 'acceptance', 1, 20)
   const boundaries = stringList(input?.boundaries, 'boundaries', 0, 20)
@@ -1411,6 +1469,12 @@ export function validateCloseInput(state, input, tasks, caller) {
 /* ------------------------------------------------------------------ */
 
 /** @param {object} state Board state. @returns {void} */
+function assertModeActive(state) {
+  if (state.active !== true) {
+    fail('MODE_NOT_ACTIVE', 'enter 三省六部 mode first with sansheng_mode {action: "enter"}')
+  }
+}
+
 function assertActive(state) {
   if (state.active !== true) {
     fail('MODE_NOT_ACTIVE', 'enter 三省六部 mode first with sansheng_mode {action: "enter"}')
@@ -1487,6 +1551,27 @@ function scopeList(value, field) {
 /* ------------------------------------------------------------------ */
 /* Stored-record guards (projection replay must stay total)            */
 /* ------------------------------------------------------------------ */
+
+/**
+ * @param {unknown} value Raw stored intake.
+ * @returns {object|null} Stored intake or null.
+ */
+function normalizeStoredIntake(value) {
+  if (!value || typeof value !== 'object') return null
+  if (typeof value.id !== 'string' || typeof value.request !== 'string' || typeof value.intent !== 'string') return null
+  return {
+    id: value.id,
+    request: value.request,
+    intent: value.intent,
+    nonGoals: Array.isArray(value.nonGoals) ? value.nonGoals.filter((item) => typeof item === 'string') : [],
+    ambiguities: Array.isArray(value.ambiguities) ? value.ambiguities.filter((item) => typeof item === 'string') : [],
+    needsClarification: value.needsClarification === true,
+    clarificationQuestion: typeof value.clarificationQuestion === 'string' ? value.clarificationQuestion : null,
+    by: typeof value.by === 'string' ? value.by : 'lead',
+    rev: Number.isInteger(value.rev) && value.rev > 0 ? value.rev : null,
+    createdAt: typeof value.createdAt === 'number' ? value.createdAt : null,
+  }
+}
 
 /**
  * @param {unknown} value Raw stored edict.

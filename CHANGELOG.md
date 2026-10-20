@@ -4,6 +4,22 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.7] — 2026-10-20
+
+### Added
+
+- **接旨 (intake) step**: `sansheng_intake` records the user request, normalized
+  intent, non-goals and ambiguities before an edict can be drafted. If
+  `needs_clarification=true`, the edict is blocked with
+  `USER_CLARIFICATION_REQUIRED` until the user answers and the intake is updated.
+- Board shows a 接旨 · 中书省 section with the request/intent/non-goals/ambiguities.
+- Tools: `sansheng_intake`; tool count 10.
+
+### Changed
+
+- An active mode cannot draft an edict without a recorded intake
+  (`INTENT_NOT_CAPTURED`); trivial skip remains unaffected.
+
 ## [0.0.6] — 2026-10-20
 
 ### Changed
