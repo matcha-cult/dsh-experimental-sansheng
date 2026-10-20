@@ -29,6 +29,14 @@ window.__ModuleLoader__.load({
 			".dss-dot-open{background:var(--dsw-alias-state-business-primary,#4c8dff)}",
 			".dss-dot-warn{background:var(--dsw-alias-state-error-primary,#f85149)}",
 			".dss-count{color:var(--dsw-alias-label-caption);font-variant-numeric:tabular-nums}",
+			".dss-page{box-sizing:border-box;width:100%;height:100%;overflow:auto;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);padding:24px 28px 48px}",
+			".dss-page-inner{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:16px}",
+			".dss-page-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--dsw-alias-border-l1,#2f3033)}",
+			".dss-page-title{margin:0;font-size:20px;font-weight:600}",
+			".dss-page-sub{color:var(--dsw-alias-label-secondary);font-size:12px}",
+			".dss-page-select{margin-left:auto;max-width:320px;background:var(--dsw-alias-bg-layer-2,#242529);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2,#3a3b40);border-radius:7px;padding:5px 8px;font-size:12px}",
+			".dss-page-tabs{display:flex;gap:2px;padding:4px 0 0;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3b40);flex-wrap:wrap}",
+			".dss-page .dss-panel{position:static;width:100%;max-height:none;box-shadow:none;border:0;background:0 0}",
 			".dss-panel{position:fixed;top:48px;right:20px;z-index:120;box-sizing:border-box;width:min(1000px,calc(100vw - 40px));max-height:min(84vh,900px);overflow:hidden;border-radius:14px;background:var(--dsw-alias-bg-layer-1,#1f2024);color:var(--dsw-alias-label-primary,#eee);border:1px solid var(--dsw-alias-border-l2,#3a3b40);box-shadow:0 20px 60px rgba(0,0,0,.5);font-size:12px;line-height:1.55;display:flex;flex-direction:column}",
 			".dss-head{display:flex;align-items:center;gap:10px;padding:13px 16px 9px;border-bottom:1px solid var(--dsw-alias-border-l2,#3a3b40)}",
 			".dss-title{display:flex;align-items:baseline;gap:8px;flex:1;min-width:0;flex-wrap:wrap}",
@@ -820,16 +828,111 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		function SanshengIcon(props) {
+			const size = props.size || 18;
+			return h("span", {
+				style: {
+					display: "inline-grid",
+					placeItems: "center",
+					width: size,
+					height: size,
+					fontSize: Math.max(11, Math.round(size * 0.62)),
+					fontWeight: 600,
+					color: props.active ? "var(--dsw-alias-state-business-primary)" : "currentColor",
+				},
+				"aria-hidden": "true",
+			}, "省");
+		}
+
+		function SanshengPage(props) {
+			const useSessions = props.useSessions;
+			const projections = useSessions((state) => state.projectionsBySession);
+			const byId = useSessions((state) => state.byId);
+			const [selectedId, setSelectedId] = react.useState(null);
+			const [tab, setTab] = react.useState("overview");
+			const rows = react.useMemo(() => {
+				const list = [];
+				for (const [id, snapshot] of Object.entries(projections || {})) {
+					const board = snapshot?.values?.sansheng;
+					if (!board) continue;
+					if (board.edict === null && board.closure === null && board.cases?.length === 0 && board.active !== true) continue;
+					if (board.edict === null && board.closure === null && (board.caseId ?? 0) === 0 && board.active !== true) continue;
+					list.push({ id, board, title: byId?.[id]?.title || String(id).slice(0, 8), updatedAt: byId?.[id]?.updatedAt || board.updatedAt || 0 });
+				}
+				list.sort((left, right) => right.updatedAt - left.updatedAt || String(left.id).localeCompare(String(right.id)));
+				return list;
+			}, [projections, byId]);
+			const active = rows.find((row) => row.id === selectedId) || rows[0] || null;
+			const board = active?.board ?? null;
+			const team = active === null ? undefined : projections?.[active.id]?.values?.agentTeam;
+			const detail = active === null ? undefined : projections?.[active.id]?.values?.sanshengHistory;
+			react.useEffect(() => {
+				if (active !== null && selectedId === null) setSelectedId(active.id);
+			}, [active, selectedId]);
+			const tabs = [
+				["overview", "总览"],
+				["tasks", "任务"],
+				["gates", "审议"],
+				["evidence", "证据"],
+				["timeline", "时间线"],
+				["history", "详细历史"],
+			];
+			const render = () => {
+				if (board === null) return h("p", { className: "dss-empty" }, "当前没有三省六部看板。激活模式后，在此查看案卷。");
+				if (tab === "tasks") return h(TasksTab, { board, team });
+				if (tab === "gates") return h(GatesTab, { board });
+				if (tab === "evidence") return h(EvidenceTab, { board });
+				if (tab === "timeline") return h(TimelineTab, { board });
+				if (tab === "history") return h(HistoryTab, { detail });
+				return h(OverviewTab, { board, team });
+			};
+			return h(
+				"div",
+				{ className: "dss-page" },
+				h("div", { className: "dss-page-inner" },
+					h("div", { className: "dss-page-head" },
+						h("h1", { className: "dss-page-title" }, "军机处 · 三省六部"),
+						h("span", { className: "dss-page-sub" }, board === null ? "暂无活动案卷" : "案卷 #" + String(board.caseId ?? 1) + " · rev " + String(board.revision ?? 0)),
+						rows.length > 1 ? h("select", {
+							className: "dss-page-select",
+							value: active?.id ?? "",
+							onChange: (event) => setSelectedId(event.target.value),
+						}, rows.map((row) => h("option", { key: row.id, value: row.id }, row.title))) : null,
+					),
+					board === null ? render() : h("div", null,
+						h("div", { className: "dss-page-tabs", role: "tablist" }, tabs.map(([key, label]) => h("button", {
+							key,
+							role: "tab",
+							"aria-selected": tab === key,
+							className: "dss-tab" + (tab === key ? " dss-tab-on" : ""),
+							onClick: () => setTab(key),
+						}, label))),
+						h("div", { className: "dss-body", style: { padding: "0" } }, render()),
+					),
+				),
+			);
+		}
+
 		function apply(ctx) {
 			ctx.effect(() => ensureStyle(), "sansheng: board style");
-			ctx.slots.inject("conversation.session.header.actions", () =>
+			ctx.slots.inject("sidebar.panellist", () =>
 				ctx.slots.register(
 					{
-						name: "conversation.session.header.actions",
+						name: "sidebar.panellist",
 						id: "sansheng",
-						order: -10,
+						order: 20,
+						label: () => "军机处",
 					},
-					sanshengAction,
+					SanshengIcon,
+				),
+			);
+			ctx.slots.inject("main", () =>
+				ctx.slots.register(
+					{
+						name: "main",
+						key: "sansheng",
+					},
+					SanshengPage,
 				),
 			);
 		}

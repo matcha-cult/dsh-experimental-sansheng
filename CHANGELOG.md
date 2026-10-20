@@ -4,6 +4,17 @@ All notable changes to `dsh-experimental-sansheng` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [0.0.2] — 2026-10-20
+
+### Changed
+
+- The 三省六部 board is now a **sidebar panel** (`sidebar.panellist` +
+  `main` page), labeled 军机处, instead of a floating overlay triggered from
+  the conversation header. It lists sessions that have a board, lets the user
+  switch between them, and keeps the six tabs (总览/任务/审议/证据/时间线/详细历史).
+- The conversation-header floating trigger and its auto-open behavior are
+  removed; the sidebar is the only board entry.
+
 ## [0.0.1] — 2026-10-19
 
 Fresh version baseline after clearing remote tags.
